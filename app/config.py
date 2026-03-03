@@ -72,6 +72,14 @@ DATABASE_URL = os.environ.get(
 )
 
 # =============================================
+# CORS
+# =============================================
+_default_origins = f"http://127.0.0.1:{os.environ.get('PORT', '8000')},http://localhost:{os.environ.get('PORT', '8000')},http://localhost:5173"
+CORS_ORIGINS: list[str] = [
+    o.strip() for o in os.environ.get('CORS_ORIGINS', _default_origins).split(',') if o.strip()
+]
+
+# =============================================
 # ПУТИ ПРОЕКТА
 # =============================================
 TEMPLATES_DIR = BASE_DIR / "templates"

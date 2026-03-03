@@ -7,6 +7,7 @@ import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
 import Spinner from '../components/ui/Spinner'
 import AppUsersPanel from '../components/ui/AppUsersPanel'
+import Pagination from '../components/ui/Pagination'
 import { usePermissions } from '../hooks/usePermissions'
 
 // ─── Filter types ────────────────────────────────────────────────────────────
@@ -549,6 +550,8 @@ function UsersReport({ dateFrom, dateTo, statusFilters }: FilterProps) {
   const [cityFilter, setCityFilter] = useState<Set<string>>(new Set())
   const [hasTelegramOnly, setHasTelegramOnly] = useState(false)
   const [copiedTg, setCopiedTg] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
 
   const { data = [], isLoading } = useQuery({ queryKey: ['reports/users'], queryFn: api.getUsersReport })
 
@@ -662,6 +665,8 @@ function UsersReport({ dateFrom, dateTo, statusFilters }: FilterProps) {
   }
 
   const hasLocalFilters = cityFilter.size > 0 || hasTelegramOnly || deptFilter !== null
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize))
+  const pagedRows = rows.slice((page - 1) * pageSize, page * pageSize)
 
   if (isLoading) return <div className="flex justify-center py-10"><Spinner /></div>
 
@@ -762,7 +767,7 @@ function UsersReport({ dateFrom, dateTo, statusFilters }: FilterProps) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {rows.map(({ user: u, launches, allowed, blocked, neutral }) => {
+              {pagedRows.map(({ user: u, launches, allowed, blocked, neutral }) => {
                 const fio = userFio(u)
                 const isSelected = selectedUser?.username === u.username
                 return (
@@ -809,6 +814,14 @@ function UsersReport({ dateFrom, dateTo, statusFilters }: FilterProps) {
             </tbody>
           </table>
         </div>
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          pageSize={pageSize}
+          total={rows.length}
+          onPage={setPage}
+          onPageSize={s => { setPageSize(s); setPage(1) }}
+        />
       </div>
 
       {selectedUser && (
@@ -822,6 +835,8 @@ function UsersReport({ dateFrom, dateTo, statusFilters }: FilterProps) {
 
 function AppsReport({ dateFrom, dateTo, statusFilters }: FilterProps) {
   const [selectedApp, setSelectedApp] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
   const { data = [], isLoading } = useQuery({ queryKey: ['reports/apps'], queryFn: api.getAppsReport })
   const { sorted, sortKey, sortDir, handleSort } = useSortedData<AppReport>(data)
 
@@ -830,6 +845,9 @@ function AppsReport({ dateFrom, dateTo, statusFilters }: FilterProps) {
     if (!matchesPeriod(a.last_seen, dateFrom, dateTo)) return false
     return true
   })
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const pagedApps = filtered.slice((page - 1) * pageSize, page * pageSize)
 
   const handleExport = () => {
     const headers = ['Приложение', 'Статус', 'Запусков', 'Пользователей', 'Компьютеров', 'Разреш.', 'Заблок.']
@@ -885,7 +903,7 @@ function AppsReport({ dateFrom, dateTo, statusFilters }: FilterProps) {
                     Нет приложений за выбранный период
                   </td>
                 </tr>
-              ) : filtered.map(a => (
+              ) : pagedApps.map(a => (
                 <tr
                   key={a.name}
                   className={`cursor-pointer transition-colors ${selectedApp === a.name ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}
@@ -901,6 +919,14 @@ function AppsReport({ dateFrom, dateTo, statusFilters }: FilterProps) {
             </tbody>
           </table>
         </div>
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          pageSize={pageSize}
+          total={filtered.length}
+          onPage={setPage}
+          onPageSize={s => { setPageSize(s); setPage(1) }}
+        />
       </div>
 
       {selectedApp && (
@@ -991,6 +1017,8 @@ function ComputerDetailPanel({ computerName, onClose }: { computerName: string; 
 
 function ComputersReport({ dateFrom, dateTo, statusFilters }: FilterProps) {
   const [selectedComputer, setSelectedComputer] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
   const { data = [], isLoading } = useQuery({ queryKey: ['reports/computers'], queryFn: api.getComputersReport })
   const { sorted, sortKey, sortDir, handleSort } = useSortedData<ComputerReport>(data)
 
@@ -1008,6 +1036,9 @@ function ComputersReport({ dateFrom, dateTo, statusFilters }: FilterProps) {
     const rows = filtered.map(c => [c.name, c.ip_address ?? '', c.users_count, c.total_launches, c.apps_count, c.status_counts.allowed, c.status_counts.blocked])
     exportCsv(headers, rows, 'report_computers.csv')
   }
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const pagedComputers = filtered.slice((page - 1) * pageSize, page * pageSize)
 
   if (isLoading) return <div className="flex justify-center py-10"><Spinner /></div>
 
@@ -1038,7 +1069,7 @@ function ComputersReport({ dateFrom, dateTo, statusFilters }: FilterProps) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {filtered.map(c => {
+              {pagedComputers.map(c => {
                 const isSelected = selectedComputer === c.name
                 return (
                   <tr
@@ -1058,6 +1089,14 @@ function ComputersReport({ dateFrom, dateTo, statusFilters }: FilterProps) {
             </tbody>
           </table>
         </div>
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          pageSize={pageSize}
+          total={filtered.length}
+          onPage={setPage}
+          onPageSize={s => { setPageSize(s); setPage(1) }}
+        />
       </div>
 
       {selectedComputer && (

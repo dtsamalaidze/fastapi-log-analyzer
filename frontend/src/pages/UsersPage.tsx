@@ -5,6 +5,7 @@ import { api } from '../services/api'
 import type { UserData, AppEntry, SortDir } from '../types'
 import Badge from '../components/ui/Badge'
 import Spinner from '../components/ui/Spinner'
+import Pagination from '../components/ui/Pagination'
 
 type SortKey = 'username' | 'total_apps' | 'total_launches' | 'allowed_count' | 'blocked_count'
 type Period = 'yesterday' | 'week' | 'month' | 'custom' | null
@@ -134,6 +135,8 @@ export default function UsersPage() {
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
   const [statusFilters, setStatusFilters] = useState<Set<StatusFilter>>(new Set())
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
 
   const { data: users = [], isLoading } = useQuery({
     queryKey: ['users'],
@@ -160,6 +163,7 @@ export default function UsersPage() {
 
   const togglePeriod = (p: Exclude<Period, null>) => {
     setPeriod(prev => (prev === p ? null : p))
+    setPage(1)
   }
 
   const toggleStatus = (s: StatusFilter) => {
@@ -168,6 +172,7 @@ export default function UsersPage() {
       next.has(s) ? next.delete(s) : next.add(s)
       return next
     })
+    setPage(1)
   }
 
   const { from: dateFrom, to: dateTo } = getPeriodDates(period, customFrom, customTo)
@@ -217,6 +222,9 @@ export default function UsersPage() {
       const cmp = typeof av === 'string' ? av.localeCompare(bv as string) : (av as number) - (bv as number)
       return sortDir === 'asc' ? cmp : -cmp
     })
+
+  const pagedUsers = processedUsers.slice((page - 1) * pageSize, page * pageSize)
+  const totalPages = Math.max(1, Math.ceil(processedUsers.length / pageSize))
 
   const hasFilters = period !== null || statusFilters.size > 0 || search.length > 0
   const filteredStats = hasFilters ? {
@@ -332,7 +340,7 @@ export default function UsersPage() {
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
         <input
           value={search}
-          onChange={e => setSearch(e.target.value)}
+          onChange={e => { setSearch(e.target.value); setPage(1) }}
           placeholder="Поиск по пользователю или отделу..."
           className="w-full pl-9 pr-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white shadow-sm"
         />
@@ -363,7 +371,7 @@ export default function UsersPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {processedUsers.map(({ user, filteredApps }) => (
+            {pagedUsers.map(({ user, filteredApps }) => (
               <UserRow
                 key={user.username}
                 user={user}
@@ -381,6 +389,14 @@ export default function UsersPage() {
             )}
           </tbody>
         </table>
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          pageSize={pageSize}
+          total={processedUsers.length}
+          onPage={p => { setPage(p); setExpanded(new Set()) }}
+          onPageSize={s => { setPageSize(s); setPage(1) }}
+        />
       </div>
     </div>
   )
