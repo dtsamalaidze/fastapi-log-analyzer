@@ -6,6 +6,10 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     ...options,
   })
+  if (res.status === 401 && url !== '/api/auth/login' && url !== '/api/auth-check') {
+    window.location.href = '/login'
+    return Promise.reject(new Error('Сессия истекла'))
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }))
     throw new Error(err.error || `HTTP ${res.status}`)

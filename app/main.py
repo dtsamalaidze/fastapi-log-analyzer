@@ -147,10 +147,8 @@ async def api_login(request: Request):
         data = await request.json()
         username = data.get('username', '')
         password = data.get('password', '')
-        print(f"🔐 API вход: {username}")
         token = auth_manager.authenticate(username, password)
         if token:
-            print(f"✅ API вход успешен: {username}")
             from app.database import user_db
             user = user_db.get_user(username)
             response = JSONResponse({
@@ -168,7 +166,6 @@ async def api_login(request: Request):
             )
             return response
         else:
-            print(f"❌ API вход неудачен: {username}")
             return JSONResponse(status_code=401, content={"error": "Неверное имя пользователя или пароль"})
     except Exception as e:
         print(f"❌ Ошибка в /api/auth/login: {e}")
@@ -180,7 +177,6 @@ async def api_logout(request: Request):
     """JSON-выход для React SPA"""
     token = request.cookies.get('session_token')
     if token:
-        print(f"🚪 API выход, токен: {token[:20]}...")
         auth_manager.logout(token)
     response = JSONResponse({"success": True})
     response.delete_cookie("session_token", path="/")
@@ -871,6 +867,14 @@ async def health_check():
 @app.post("/api/users/{username}/profile")
 async def set_user_profile(username: str, request: Request):
     """Сохраняет профиль пользователя (ФИО, город, адрес, telegram)"""
+    user = get_current_user(request)
+    if not user:
+        return JSONResponse(status_code=401, content={"error": "Не авторизован"})
+    if user['role'] != 'admin':
+        from app.database import account_db as _acct_db
+        perms = _acct_db.get_permissions(user['username']) or {}
+        if not perms.get('users', {}).get('edit_profile'):
+            return JSONResponse(status_code=403, content={"error": "Доступ запрещён"})
     try:
         data = await request.json()
         from app.database import log_user_db
@@ -1130,9 +1134,10 @@ async def update_account_password(username: str, request: Request):
         if not password or len(password) < 6:
             return JSONResponse(status_code=400, content={"error": "Пароль должен быть не менее 6 символов"})
 
-        from app.database import account_db
+        from app.database import account_db, session_db
         success = account_db.update_password(username, password)
         if success:
+            session_db.delete_sessions_by_username(username)
             return JSONResponse({"success": True, "message": "Пароль изменён"})
         return JSONResponse(status_code=404, content={"error": "Аккаунт не найден"})
     except Exception as e:

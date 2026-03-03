@@ -115,6 +115,10 @@ class SessionDB:
         deleted = self.db.query(SessionModel).filter(SessionModel.token == token).delete()
         return deleted > 0
 
+    def delete_sessions_by_username(self, username: str) -> int:
+        deleted = self.db.query(SessionModel).filter(SessionModel.username == username).delete()
+        return deleted
+
 
 class DepartmentDB:
     """Работа с отделами"""
