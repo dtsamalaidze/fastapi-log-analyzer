@@ -14,7 +14,7 @@ from app.database import (
     department_apps_db, department_db, settings_db
 )
 from app.db import SessionLocal
-from app.models import LogUser, LogApp, Department
+from app.models import LogUser, LogApp, Department, DepartmentAllowedApp, DepartmentBlockedApp, Computer, UserComputer
 from sqlalchemy import func
 
 LAST_PROCESSED_MTIME_KEY = 'logs.last_processed_mtime'
@@ -214,133 +214,161 @@ class LogAnalyzer:
             'new_last_mtime': int(max_mtime)
         }
 
-    def get_app_status_for_user(self, app_name: str, user_department_id: Optional[int]) -> str:
-        """
-        Определяет статус приложения для пользователя с учетом приоритетов:
-        1. Правила отдела (заблокированные) — наивысший приоритет
-        2. Правила отдела (разрешенные) — перекрывают глобальные запреты
-        3. Глобально заблокированные
-        4. Глобально разрешенные
-        5. Нейтральные (по умолчанию)
-        """
-        app_name_lower = app_name.lower()
-
-        # 1–2. Если у пользователя есть отдел, правила отдела имеют высший приоритет
-        if user_department_id:
-            dept_blocked = [a.lower() for a in department_apps_db.get_blocked_by_department(user_department_id)]
-            dept_allowed = [a.lower() for a in department_apps_db.get_allowed_by_department(user_department_id)]
-
-            if app_name_lower in dept_blocked:
-                return 'blocked'
-
-            if app_name_lower in dept_allowed:
-                return 'allowed'
-
-        # 3. Глобально заблокированные (только если нет правила отдела)
+    def _get_app_status(
+        self,
+        app_name_lower: str,
+        dept_allowed: set,
+        dept_blocked: set,
+    ) -> str:
+        """Определяет статус приложения по заранее загруженным спискам отдела и глобальным."""
+        if app_name_lower in dept_blocked:
+            return 'blocked'
+        if app_name_lower in dept_allowed:
+            return 'allowed'
         if app_name_lower in self.global_blocked:
             return 'blocked'
-
-        # 4. Глобально разрешенные
         if app_name_lower in self.global_allowed:
             return 'allowed'
-
-        # 5. По умолчанию — нейтральный
         return 'neutral'
 
     def get_all_users_data(self) -> List[Dict]:
-        """Получает данные по всем пользователям с учетом правил отделов"""
-
-        users_data = []
-
+        """Получает данные по всем пользователям с учетом правил отделов.
+        Использует батч-запросы — O(1) запросов к БД вне зависимости от числа юзеров.
+        """
         db = SessionLocal()
         try:
+            # 1. Все пользователи с отделами
             log_users = (
                 db.query(LogUser, Department)
                 .outerjoin(Department, LogUser.department_id == Department.id)
                 .order_by(LogUser.username)
                 .all()
             )
+            if not log_users:
+                return []
 
-            for log_user, dept in log_users:
-                user_id = log_user.id
-                username = log_user.username
-                department_id = log_user.department_id
-                department_name = dept.name if dept else 'Не указан'
+            user_ids = [u.id for u, _ in log_users]
 
-                apps = log_app_db.get_user_apps(user_id)
-
-                apps_list = []
-                allowed_count = 0
-                blocked_count = 0
-                neutral_count = 0
-
-                for app in apps:
-                    status = self.get_app_status_for_user(app['name'], department_id)
-
-                    if status == 'allowed':
-                        allowed_count += 1
-                    elif status == 'blocked':
-                        blocked_count += 1
-                    else:
-                        neutral_count += 1
-
-                    apps_list.append({
-                        'name': app['name'],
-                        'first_launch': app['first_launch'],
-                        'last_seen': app.get('last_seen'),
-                        'launch_count': app['launch_count'],
-                        'status': status
-                    })
-
-                apps_list.sort(key=lambda x: x['first_launch'])
-
-                first_activity = None
-                if log_user.first_seen:
-                    ts = str(log_user.first_seen)
-                    first_activity = ts.split()[1] if ' ' in ts else None
-
-                # Count distinct log dates from first_launch
-                log_files_count = (
-                    db.query(func.count(func.distinct(func.substring(LogApp.first_launch, 1, 10))))
-                    .filter(LogApp.user_id == user_id, LogApp.first_launch != '')
-                    .scalar()
-                ) or 1
-
-                computers = log_user_db.get_computers(username)
-                computers_str = ', '.join(computers) if computers else 'Не указан'
-
-                users_data.append({
-                    'username': username,
-                    'last_name': log_user.last_name,
-                    'first_name': log_user.first_name,
-                    'middle_name': log_user.middle_name,
-                    'city': log_user.city,
-                    'address': log_user.address,
-                    'telegram': log_user.telegram,
-                    'department_id': department_id,
-                    'department': department_name,
-                    'computers': computers_str,
-                    'log_date': datetime.now().strftime('%Y-%m-%d'),
-                    'first_activity': first_activity,
-                    'apps': apps_list,
-                    'total_apps': len(apps_list),
-                    'total_launches': sum(app['launch_count'] for app in apps_list),
-                    'allowed_count': allowed_count,
-                    'blocked_count': blocked_count,
-                    'neutral_count': neutral_count,
-                    'log_files_count': log_files_count
+            # 2. Все приложения всех пользователей за один запрос
+            all_apps_rows = (
+                db.query(LogApp.user_id, LogApp.name, LogApp.first_launch, LogApp.launch_count, LogApp.last_seen)
+                .filter(LogApp.user_id.in_(user_ids))
+                .all()
+            )
+            apps_by_user: Dict[int, List[Dict]] = {}
+            for row in all_apps_rows:
+                apps_by_user.setdefault(row[0], []).append({
+                    'name': row[1], 'first_launch': row[2],
+                    'launch_count': row[3], 'last_seen': row[4],
                 })
+
+            # 3. Количество уникальных дат логов на пользователя
+            log_files_rows = (
+                db.query(
+                    LogApp.user_id,
+                    func.count(func.distinct(func.substring(LogApp.first_launch, 1, 10)))
+                )
+                .filter(LogApp.user_id.in_(user_ids), LogApp.first_launch != '')
+                .group_by(LogApp.user_id)
+                .all()
+            )
+            log_files_by_user: Dict[int, int] = {row[0]: row[1] for row in log_files_rows}
+
+            # 4. Все компьютеры всех пользователей
+            computers_rows = (
+                db.query(LogUser.id, Computer.name)
+                .join(UserComputer, LogUser.id == UserComputer.user_id)
+                .join(Computer, Computer.id == UserComputer.computer_id)
+                .filter(LogUser.id.in_(user_ids))
+                .order_by(UserComputer.last_seen.desc())
+                .all()
+            )
+            computers_by_user: Dict[int, List[str]] = {}
+            for uid, comp_name in computers_rows:
+                computers_by_user.setdefault(uid, []).append(comp_name)
+
+            # 5. Правила всех отделов (2 запроса на все отделы сразу)
+            dept_ids = list({u.department_id for u, _ in log_users if u.department_id})
+            dept_allowed: Dict[int, set] = {}
+            dept_blocked: Dict[int, set] = {}
+            if dept_ids:
+                for dept_id, app_name in (
+                    db.query(DepartmentAllowedApp.department_id, DepartmentAllowedApp.app_name)
+                    .filter(DepartmentAllowedApp.department_id.in_(dept_ids))
+                    .all()
+                ):
+                    dept_allowed.setdefault(dept_id, set()).add(app_name.lower())
+
+                for dept_id, app_name in (
+                    db.query(DepartmentBlockedApp.department_id, DepartmentBlockedApp.app_name)
+                    .filter(DepartmentBlockedApp.department_id.in_(dept_ids))
+                    .all()
+                ):
+                    dept_blocked.setdefault(dept_id, set()).add(app_name.lower())
+
         finally:
             db.close()
 
+        # Собираем результат без обращений к БД
+        users_data = []
+        today = datetime.now().strftime('%Y-%m-%d')
+
+        for log_user, dept in log_users:
+            user_id = log_user.id
+            department_id = log_user.department_id
+            allowed_set = dept_allowed.get(department_id, set())
+            blocked_set = dept_blocked.get(department_id, set())
+
+            apps = apps_by_user.get(user_id, [])
+            apps_list = []
+            allowed_count = blocked_count = neutral_count = 0
+
+            for app in sorted(apps, key=lambda x: x['first_launch'] or ''):
+                status = self._get_app_status(app['name'].lower(), allowed_set, blocked_set)
+                if status == 'allowed':
+                    allowed_count += 1
+                elif status == 'blocked':
+                    blocked_count += 1
+                else:
+                    neutral_count += 1
+                apps_list.append({
+                    'name': app['name'],
+                    'first_launch': app['first_launch'],
+                    'last_seen': app['last_seen'],
+                    'launch_count': app['launch_count'],
+                    'status': status,
+                })
+
+            first_activity = None
+            if log_user.first_seen:
+                ts = str(log_user.first_seen)
+                first_activity = ts.split()[1] if ' ' in ts else None
+
+            computers = computers_by_user.get(user_id, [])
+
+            users_data.append({
+                'username': log_user.username,
+                'last_name': log_user.last_name,
+                'first_name': log_user.first_name,
+                'middle_name': log_user.middle_name,
+                'city': log_user.city,
+                'address': log_user.address,
+                'telegram': log_user.telegram,
+                'department_id': department_id,
+                'department': dept.name if dept else 'Не указан',
+                'computers': ', '.join(computers) if computers else 'Не указан',
+                'log_date': today,
+                'first_activity': first_activity,
+                'apps': apps_list,
+                'total_apps': len(apps_list),
+                'total_launches': sum(a['launch_count'] for a in apps_list),
+                'allowed_count': allowed_count,
+                'blocked_count': blocked_count,
+                'neutral_count': neutral_count,
+                'log_files_count': log_files_by_user.get(user_id, 1),
+            })
+
         print(f"📊 get_all_users_data: загружено {len(users_data)} пользователей")
-
-        # Для отладки выведем статистику по первому пользователю
-        if users_data and len(users_data) > 0:
-            first_user = users_data[0]
-            print(f"👤 {first_user['username']}: всего {first_user['total_apps']} приложений, "
-                  f"✅ {first_user['allowed_count']}, ❌ {first_user['blocked_count']}, ⚪ {first_user['neutral_count']}")
-
         return users_data
 
     def _nslookup(self, hostname: str, timeout: int = 3) -> str:

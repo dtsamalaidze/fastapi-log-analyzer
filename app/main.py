@@ -217,8 +217,10 @@ async def get_stats(request: Request):
 # ============= API ДЛЯ ГЛОБАЛЬНЫХ ПРИЛОЖЕНИЙ =============
 
 @app.get("/api/global/allowed")
-async def get_global_allowed():
+async def get_global_allowed(request: Request):
     """Получает список глобально разрешенных приложений"""
+    if not get_current_user(request):
+        return JSONResponse(status_code=401, content={"error": "Не авторизован"})
     try:
         apps = global_apps_manager.get_allowed_apps()
         return JSONResponse({
@@ -284,8 +286,10 @@ async def remove_global_allowed(request: Request):
 
 
 @app.get("/api/global/blocked")
-async def get_global_blocked():
+async def get_global_blocked(request: Request):
     """Получает список глобально заблокированных приложений"""
+    if not get_current_user(request):
+        return JSONResponse(status_code=401, content={"error": "Не авторизован"})
     try:
         apps = global_apps_manager.get_blocked_apps()
         return JSONResponse({
@@ -888,8 +892,10 @@ async def set_user_profile(username: str, request: Request):
 # ============= API ДЛЯ ДЕТАЛЕЙ КОМПЬЮТЕРОВ =============
 
 @app.get("/api/computers/{computer_name}/users")
-async def get_computer_users(computer_name: str):
+async def get_computer_users(computer_name: str, request: Request):
     """Возвращает пользователей компьютера и его IP-адрес"""
+    if not get_current_user(request):
+        return JSONResponse(status_code=401, content={"error": "Не авторизован"})
     try:
         from app.database import log_user_db
         users = log_user_db.get_computer_users(computer_name)
@@ -907,8 +913,10 @@ async def get_computer_users(computer_name: str):
 # ============= API ДЛЯ ДЕТАЛЕЙ ПРИЛОЖЕНИЙ =============
 
 @app.get("/api/apps/{app_name}/users")
-async def get_app_users(app_name: str):
+async def get_app_users(app_name: str, request: Request):
     """Получает список пользователей и компьютеров для конкретного приложения"""
+    if not get_current_user(request):
+        return JSONResponse(status_code=401, content={"error": "Не авторизован"})
     try:
         from app.database import log_app_db
         entries = log_app_db.get_app_users(app_name)
