@@ -1,0 +1,19 @@
+interface BadgeProps {
+  status: 'allowed' | 'blocked' | 'neutral'
+  label?: string
+}
+
+const statusConfig = {
+  allowed: { cls: 'bg-emerald-100 text-emerald-700', label: 'Разрешено' },
+  blocked: { cls: 'bg-red-100 text-red-700', label: 'Заблокировано' },
+  neutral: { cls: 'bg-gray-100 text-gray-600', label: 'Нейтрально' },
+}
+
+export default function Badge({ status, label }: BadgeProps) {
+  const cfg = statusConfig[status]
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${cfg.cls}`}>
+      {label ?? cfg.label}
+    </span>
+  )
+}

@@ -1,0 +1,33 @@
+# Секреты
+.env
+
+# Данные и БД
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Логи
+logs/
+*.log
+
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+static/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Claude Code
+.claude/
