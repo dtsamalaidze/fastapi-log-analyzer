@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # app/main.py
 import asyncio
+import logging
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
@@ -14,22 +15,48 @@ from typing import Optional
 
 # ============= RATE LIMITER =============
 _login_attempts: dict[str, list[datetime]] = defaultdict(list)
-_LOGIN_MAX_ATTEMPTS = 10   # попыток
-_LOGIN_WINDOW_SEC   = 60   # за 60 секунд
+_LOGIN_MAX_ATTEMPTS = 10   # попыток с одного IP за окно
+_LOGIN_WINDOW_SEC   = 60   # окно в секундах
+
+_user_fail_count: dict[str, int] = defaultdict(int)
+_user_locked_until: dict[str, datetime] = {}
+_USER_MAX_FAILS  = 5       # неудачных попыток до блокировки аккаунта
+_USER_LOCK_SEC   = 300     # блокировка на 5 минут
 
 def _check_rate_limit(ip: str) -> bool:
-    """Возвращает True если лимит не превышен, False если заблокирован."""
+    """Возвращает True если IP-лимит не превышен."""
     now = datetime.now()
     cutoff = now - timedelta(seconds=_LOGIN_WINDOW_SEC)
-    attempts = _login_attempts[ip]
-    # удаляем старые попытки
-    _login_attempts[ip] = [t for t in attempts if t > cutoff]
+    _login_attempts[ip] = [t for t in _login_attempts[ip] if t > cutoff]
     if len(_login_attempts[ip]) >= _LOGIN_MAX_ATTEMPTS:
         return False
     _login_attempts[ip].append(now)
     return True
 
+def _check_user_lockout(username: str) -> bool:
+    """Возвращает True если аккаунт не заблокирован."""
+    locked_until = _user_locked_until.get(username)
+    if locked_until and datetime.now() < locked_until:
+        return False
+    return True
+
+def _record_failed_login(username: str) -> None:
+    """Фиксирует неудачную попытку входа; блокирует аккаунт при превышении лимита."""
+    _user_fail_count[username] += 1
+    if _user_fail_count[username] >= _USER_MAX_FAILS:
+        _user_locked_until[username] = datetime.now() + timedelta(seconds=_USER_LOCK_SEC)
+        _user_fail_count[username] = 0
+        logger.warning("Аккаунт %s заблокирован на %d сек после %d неудачных попыток",
+                       username, _USER_LOCK_SEC, _USER_MAX_FAILS)
+
+def _reset_user_lockout(username: str) -> None:
+    """Сбрасывает счётчик неудач при успешном входе."""
+    _user_fail_count.pop(username, None)
+    _user_locked_until.pop(username, None)
+
 sys.path.append(str(Path(__file__).parent.parent))
+
+logger = logging.getLogger(__name__)
 
 from app import config
 from app.log_analyzer import LogAnalyzer
@@ -46,12 +73,17 @@ async def _s3_sync_loop():
     loop = asyncio.get_running_loop()
     while True:
         try:
-            result = await loop.run_in_executor(None, s3_syncer.sync)
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, s3_syncer.sync),
+                timeout=300,
+            )
             if result.get('downloaded', 0) > 0:
-                print(f"🔄 S3 скачал {result['downloaded']} файлов — запускаю обработку логов...")
+                logger.info("S3 скачал %d файлов — запускаю обработку логов...", result['downloaded'])
                 await loop.run_in_executor(None, analyzer.process_log_files)
+        except asyncio.TimeoutError:
+            logger.error("S3 синхронизация превысила таймаут 300 сек")
         except Exception as e:
-            print(f"❌ S3 фоновая синхронизация: {e}")
+            logger.error("S3 фоновая синхронизация: %s", e, exc_info=True)
         await asyncio.sleep(config.S3_SYNC_INTERVAL)
 
 
@@ -59,12 +91,12 @@ async def _initial_log_load():
     """Начальная загрузка логов при старте сервера."""
     loop = asyncio.get_running_loop()
     try:
-        print("🔄 Начальная загрузка логов...")
+        logger.info("Начальная загрузка логов...")
         result = await loop.run_in_executor(None, analyzer.process_log_files)
-        print(f"✅ Начальная загрузка завершена: обработано {result['processed']} из {result['candidates']} файлов")
+        logger.info("Начальная загрузка завершена: обработано %d из %d файлов", result['processed'], result['candidates'])
         await loop.run_in_executor(None, analyzer.resolve_computer_ips)
     except Exception as e:
-        print(f"❌ Ошибка при начальной загрузке логов: {e}")
+        logger.error("Ошибка при начальной загрузке логов: %s", e, exc_info=True)
 
 
 @asynccontextmanager
@@ -74,18 +106,18 @@ async def lifespan(app: FastAPI):
     db_manager.bootstrap()
     analyzer.global_allowed = [a.lower() for a in global_apps_manager.get_allowed_apps()]
     analyzer.global_blocked = [a.lower() for a in global_apps_manager.get_blocked_apps()]
-    print(f"🌍 Global allowed apps: {len(analyzer.global_allowed)}")
-    print(f"🌍 Global blocked apps: {len(analyzer.global_blocked)}")
-    print(f"🏢 Departments: {len(department_manager.get_all_departments())}")
+    logger.info("Global allowed apps: %d", len(analyzer.global_allowed))
+    logger.info("Global blocked apps: %d", len(analyzer.global_blocked))
+    logger.info("Departments: %d", len(department_manager.get_all_departments()))
 
     await _initial_log_load()
 
     s3_task = None
     if config.S3_ENABLED:
         s3_task = asyncio.create_task(_s3_sync_loop())
-        print(f"🔄 S3-синхронизация запущена (каждые {config.S3_SYNC_INTERVAL // 60} мин, бакет: {config.S3_BUCKET})")
+        logger.info("S3-синхронизация запущена (каждые %d мин, бакет: %s)", config.S3_SYNC_INTERVAL // 60, config.S3_BUCKET)
     else:
-        print("⚠️  S3 не настроен — автосинхронизация отключена.")
+        logger.warning("S3 не настроен — автосинхронизация отключена.")
     yield
     if s3_task:
         s3_task.cancel()
@@ -115,7 +147,7 @@ try:
     if _spa_assets.exists():
         app.mount("/assets", StaticFiles(directory=str(_spa_assets)), name="spa-assets")
 except Exception as e:
-    print(f"⚠️ Ошибка монтирования SPA assets: {e}")
+    logger.warning("Ошибка монтирования SPA assets: %s", e)
 
 # Создаем анализатор логов (списки заполняются в lifespan после инициализации БД)
 analyzer = LogAnalyzer(log_folder=config.LOG_FOLDER)
@@ -168,8 +200,11 @@ async def api_login(request: Request):
         data = await request.json()
         username = data.get('username', '')
         password = data.get('password', '')
+        if not _check_user_lockout(username):
+            return JSONResponse(status_code=429, content={"error": "Аккаунт временно заблокирован. Попробуйте позже."})
         token = auth_manager.authenticate(username, password)
         if token:
+            _reset_user_lockout(username)
             from app.database import user_db
             user = user_db.get_user(username)
             response = JSONResponse({
@@ -187,10 +222,11 @@ async def api_login(request: Request):
             )
             return response
         else:
+            _record_failed_login(username)
             return JSONResponse(status_code=401, content={"error": "Неверное имя пользователя или пароль"})
     except Exception as e:
-        print(f"❌ Ошибка в /api/auth/login: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/auth/login: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.post("/api/auth/logout")
@@ -214,8 +250,8 @@ async def get_users(request: Request):
         users_data = apply_data_scope(users_data, get_user_data_scope(request))
         return JSONResponse(content=users_data)
     except Exception as e:
-        print(f"❌ Ошибка в /api/users: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/users: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.get("/api/stats")
@@ -227,8 +263,8 @@ async def get_stats(request: Request):
         stats_data = analyzer.get_global_stats(users_data)
         return JSONResponse(content=stats_data)
     except Exception as e:
-        print(f"❌ Ошибка в /api/stats: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/stats: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 # ============= API ДЛЯ ГЛОБАЛЬНЫХ ПРИЛОЖЕНИЙ =============
@@ -245,8 +281,8 @@ async def get_global_allowed(request: Request):
             "count": len(apps)
         })
     except Exception as e:
-        print(f"❌ Ошибка в /api/global/allowed: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/global/allowed: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.post("/api/global/allowed/add")
@@ -273,8 +309,8 @@ async def add_global_allowed(request: Request):
             "message": "Приложение добавлено в глобально разрешенные" if success else "Приложение уже в списке"
         })
     except Exception as e:
-        print(f"❌ Ошибка в /api/global/allowed/add: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/global/allowed/add: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.post("/api/global/allowed/remove")
@@ -298,8 +334,8 @@ async def remove_global_allowed(request: Request):
             "message": "Приложение удалено из глобально разрешенных" if success else "Приложение не найдено"
         })
     except Exception as e:
-        print(f"❌ Ошибка в /api/global/allowed/remove: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/global/allowed/remove: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.get("/api/global/blocked")
@@ -314,8 +350,8 @@ async def get_global_blocked(request: Request):
             "count": len(apps)
         })
     except Exception as e:
-        print(f"❌ Ошибка в /api/global/blocked: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/global/blocked: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.post("/api/global/blocked/add")
@@ -342,8 +378,8 @@ async def add_global_blocked(request: Request):
             "message": "Приложение добавлено в глобально заблокированные" if success else "Приложение уже в списке"
         })
     except Exception as e:
-        print(f"❌ Ошибка в /api/global/blocked/add: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/global/blocked/add: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.post("/api/global/blocked/remove")
@@ -367,21 +403,23 @@ async def remove_global_blocked(request: Request):
             "message": "Приложение удалено из глобально заблокированных" if success else "Приложение не найдено"
         })
     except Exception as e:
-        print(f"❌ Ошибка в /api/global/blocked/remove: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/global/blocked/remove: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 # ============= API ДЛЯ ОТДЕЛОВ =============
 
 @app.get("/api/departments")
-async def get_departments():
+async def get_departments(request: Request):
     """Получает список всех отделов со статистикой"""
+    if not get_current_user(request):
+        return JSONResponse(status_code=401, content={"error": "Не авторизован"})
     try:
         departments = department_manager.get_departments_with_stats()
         return JSONResponse({"departments": departments})
     except Exception as e:
-        print(f"❌ Ошибка в /api/departments: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/departments: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.post("/api/departments/add")
@@ -405,8 +443,8 @@ async def add_department(request: Request):
             "message": "Отдел добавлен" if success else "Отдел уже существует"
         })
     except Exception as e:
-        print(f"❌ Ошибка в /api/departments/add: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/departments/add: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.post("/api/departments/remove")
@@ -430,8 +468,8 @@ async def remove_department(request: Request):
             "message": "Отдел удален" if success else "Отдел не найден"
         })
     except Exception as e:
-        print(f"❌ Ошибка в /api/departments/remove: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/departments/remove: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.post("/api/departments/set-user")
@@ -452,8 +490,8 @@ async def set_user_department(request: Request):
             "message": f"Отдел пользователя {username} изменен на {department}" if success else "Ошибка при изменении отдела"
         })
     except Exception as e:
-        print(f"❌ Ошибка в /api/departments/set-user: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/departments/set-user: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.get("/api/departments/{department_name}/apps")
@@ -471,8 +509,8 @@ async def get_department_apps(department_name: str):
             "blocked_count": len(blocked)
         })
     except Exception as e:
-        print(f"❌ Ошибка в /api/departments/{department_name}/apps: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/departments/{department_name}/apps: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.post("/api/departments/{department_name}/apps/allowed/add")
@@ -498,8 +536,8 @@ async def add_department_allowed(department_name: str, request: Request):
             "message": f"Приложение добавлено в разрешенные для отдела {department_name}" if success else "Приложение уже в списке"
         })
     except Exception as e:
-        print(f"❌ Ошибка в /api/departments/{department_name}/apps/allowed/add: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/departments/{department_name}/apps/allowed/add: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.post("/api/departments/{department_name}/apps/allowed/remove")
@@ -522,8 +560,8 @@ async def remove_department_allowed(department_name: str, request: Request):
             "message": f"Приложение удалено из разрешенных для отдела {department_name}" if success else "Приложение не найдено"
         })
     except Exception as e:
-        print(f"❌ Ошибка в /api/departments/{department_name}/apps/allowed/remove: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/departments/{department_name}/apps/allowed/remove: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.post("/api/departments/{department_name}/apps/blocked/add")
@@ -549,8 +587,8 @@ async def add_department_blocked(department_name: str, request: Request):
             "message": f"Приложение добавлено в заблокированные для отдела {department_name}" if success else "Приложение уже в списке"
         })
     except Exception as e:
-        print(f"❌ Ошибка в /api/departments/{department_name}/apps/blocked/add: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/departments/{department_name}/apps/blocked/add: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.post("/api/departments/{department_name}/apps/blocked/remove")
@@ -573,8 +611,8 @@ async def remove_department_blocked(department_name: str, request: Request):
             "message": f"Приложение удалено из заблокированных для отдела {department_name}" if success else "Приложение не найдено"
         })
     except Exception as e:
-        print(f"❌ Ошибка в /api/departments/{department_name}/apps/blocked/remove: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/departments/{department_name}/apps/blocked/remove: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 # ============= API ДЛЯ ОБРАБОТКИ ЛОГОВ =============
@@ -594,19 +632,21 @@ async def process_logs(request: Request):
         await loop.run_in_executor(None, analyzer.resolve_computer_ips)
         return JSONResponse(content={"success": True, "result": result})
     except Exception as e:
-        print(f"❌ Ошибка в /api/logs/process: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/logs/process: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.get("/api/logs/status")
-async def logs_status():
+async def logs_status(request: Request):
     """Статус обработки логов (в т.ч. последняя обработка)."""
+    if not get_current_user(request):
+        return JSONResponse(status_code=401, content={"error": "Не авторизован"})
     try:
         status = analyzer.get_processing_status()
         return JSONResponse(content=status)
     except Exception as e:
-        print(f"❌ Ошибка в /api/logs/status: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/logs/status: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 # ============= API ДЛЯ ОТЧЕТОВ =============
@@ -619,8 +659,8 @@ async def get_users_report(request: Request):
         users_data = apply_data_scope(users_data, get_user_data_scope(request))
         return JSONResponse(content=users_data)
     except Exception as e:
-        print(f"❌ Ошибка в /api/reports/users: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/reports/users: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.get("/api/reports/apps")
@@ -685,8 +725,8 @@ async def get_apps_report(request: Request):
 
         return JSONResponse(content=result)
     except Exception as e:
-        print(f"❌ Ошибка в /api/reports/apps: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/reports/apps: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.get("/api/reports/computers")
@@ -735,8 +775,8 @@ async def get_computers_report(request: Request):
 
         return JSONResponse(content=result)
     except Exception as e:
-        print(f"❌ Ошибка в /api/reports/computers: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/reports/computers: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.get("/api/reports/departments")
@@ -824,8 +864,8 @@ async def get_departments_report(request: Request):
 
         return JSONResponse(content=result)
     except Exception as e:
-        print(f"❌ Ошибка в /api/reports/departments: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/reports/departments: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 # ============= ЭНДПОЙНТ ДЛЯ ПРОВЕРКИ АВТОРИЗАЦИИ =============
@@ -842,8 +882,10 @@ async def auth_check(request: Request):
 # ============= S3-СИНХРОНИЗАЦИЯ =============
 
 @app.get("/api/s3/status")
-async def s3_status():
+async def s3_status(request: Request):
     """Статус S3-синхронизации."""
+    if not get_current_user(request):
+        return JSONResponse(status_code=401, content={"error": "Не авторизован"})
     return JSONResponse(s3_syncer.status())
 
 
@@ -859,7 +901,7 @@ async def s3_sync_now(request: Request):
         result = await loop.run_in_executor(None, s3_syncer.sync)
         return JSONResponse(result)
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 # ============= ЗДОРОВЬЕ СЕРВЕРА =============
@@ -910,8 +952,8 @@ async def set_user_profile(username: str, request: Request):
         )
         return JSONResponse({"success": success})
     except Exception as e:
-        print(f"❌ Ошибка в /api/users/{username}/profile: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/users/{username}/profile: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 # ============= API ДЛЯ ДЕТАЛЕЙ КОМПЬЮТЕРОВ =============
@@ -931,8 +973,8 @@ async def get_computer_users(computer_name: str, request: Request):
             "users": users,
         })
     except Exception as e:
-        print(f"❌ Ошибка в /api/computers/{computer_name}/users: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/computers/{computer_name}/users: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 # ============= API ДЛЯ ДЕТАЛЕЙ ПРИЛОЖЕНИЙ =============
@@ -947,8 +989,8 @@ async def get_app_users(app_name: str, request: Request):
         entries = log_app_db.get_app_users(app_name)
         return JSONResponse(content={"app": app_name, "entries": entries})
     except Exception as e:
-        print(f"❌ Ошибка в /api/apps/{app_name}/users: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/apps/{app_name}/users: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 # ============= МОИ ПРАВА И РОЛИ =============
@@ -988,7 +1030,7 @@ async def get_scope_options(request: Request):
             db.close()
         return JSONResponse({'departments': dept_names, 'cities': cities, 'users': users_list})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.get("/api/me/permissions")
@@ -1031,7 +1073,7 @@ async def create_role(request: Request):
             return JSONResponse({"success": True, "message": f"Роль '{name}' создана"})
         return JSONResponse(status_code=409, content={"error": f"Роль '{name}' уже существует"})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.put("/api/roles/{role_name}")
@@ -1048,7 +1090,7 @@ async def update_role(role_name: str, request: Request):
         role_db.update(role_name, description=description, permissions=permissions)
         return JSONResponse({"success": True, "message": "Роль обновлена"})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.delete("/api/roles/{role_name}")
@@ -1077,7 +1119,7 @@ async def get_accounts(request: Request):
         accounts = account_db.get_all()
         return JSONResponse(content={"accounts": accounts})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.post("/api/accounts/create")
@@ -1106,7 +1148,7 @@ async def create_account(request: Request):
             return JSONResponse({"success": True, "message": f"Аккаунт '{username}' создан"})
         return JSONResponse(status_code=409, content={"error": f"Логин '{username}' уже занят"})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.put("/api/accounts/{username}")
@@ -1138,7 +1180,7 @@ async def update_account(username: str, request: Request):
             return JSONResponse({"success": True, "message": "Аккаунт обновлён"})
         return JSONResponse(status_code=404, content={"error": "Аккаунт не найден"})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.put("/api/accounts/{username}/password")
@@ -1162,7 +1204,7 @@ async def update_account_password(username: str, request: Request):
             return JSONResponse({"success": True, "message": "Пароль изменён"})
         return JSONResponse(status_code=404, content={"error": "Аккаунт не найден"})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.delete("/api/accounts/{username}")
@@ -1185,7 +1227,7 @@ async def delete_account(username: str, request: Request):
             return JSONResponse({"success": True, "message": f"Аккаунт '{username}' удалён"})
         return JSONResponse(status_code=404, content={"error": "Аккаунт не найден"})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.get("/api/accounts/{username}/permissions")
@@ -1199,7 +1241,7 @@ async def get_account_permissions(username: str, request: Request):
         perms = account_db.get_permissions(username)
         return JSONResponse({"username": username, "permissions": perms})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.put("/api/accounts/{username}/permissions")
@@ -1215,7 +1257,7 @@ async def set_account_permissions(username: str, request: Request):
         account_db.set_permissions(username, permissions)
         return JSONResponse({"success": True, "message": "Права доступа сохранены"})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 # ============= ОБСЛУЖИВАНИЕ БАЗЫ ДАННЫХ =============
@@ -1267,8 +1309,8 @@ async def get_db_stats(request: Request):
             "tables": table_stats,
         })
     except Exception as e:
-        print(f"❌ Ошибка в /api/db/stats: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/db/stats: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.post("/api/db/vacuum")
@@ -1290,8 +1332,8 @@ async def vacuum_db(request: Request):
         await loop.run_in_executor(None, run_vacuum)
         return JSONResponse({"success": True, "message": "VACUUM ANALYZE выполнен"})
     except Exception as e:
-        print(f"❌ Ошибка в /api/db/vacuum: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/db/vacuum: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.get("/api/db/backup")
@@ -1347,8 +1389,8 @@ async def backup_db(request: Request):
             headers={'Content-Disposition': f'attachment; filename="{filename}"'},
         )
     except Exception as e:
-        print(f"❌ Ошибка в /api/db/backup: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/db/backup: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.post("/api/db/integrity-check")
@@ -1374,8 +1416,8 @@ async def integrity_check_db(request: Request):
         ok = await loop.run_in_executor(None, run_check)
         return JSONResponse({"success": True, "ok": ok, "results": ["ok"] if ok else ["error"]})
     except Exception as e:
-        print(f"❌ Ошибка в /api/db/integrity-check: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/db/integrity-check: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 @app.post("/api/db/clear-logs")
@@ -1439,8 +1481,8 @@ async def clear_logs_db(request: Request):
         deleted = await loop.run_in_executor(None, run_clear)
         return JSONResponse({"success": True, "deleted": deleted})
     except Exception as e:
-        print(f"❌ Ошибка в /api/db/clear-logs: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        logger.error("Ошибка в /api/db/clear-logs: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
 
 
 # ============= SPA CATCH-ALL =============

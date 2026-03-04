@@ -30,6 +30,9 @@ class User(Base):
 
 class Session(Base):
     __tablename__ = 'sessions'
+    __table_args__ = (
+        Index('idx_sessions_username', 'username'),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     token: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
@@ -122,6 +125,8 @@ class LogUser(Base):
     __table_args__ = (
         Index('idx_log_users_username', 'username'),
         Index('idx_log_users_department', 'department_id'),
+        Index('idx_log_users_city', 'city'),
+        Index('idx_log_users_last_seen', 'last_seen'),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

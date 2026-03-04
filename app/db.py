@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # app/db.py
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 
 from app.config import DATABASE_URL
@@ -29,3 +29,16 @@ def get_db():
 def init_db():
     """Create all tables defined in models.py (idempotent)."""
     Base.metadata.create_all(bind=engine)
+    _ensure_indexes()
+
+
+def _ensure_indexes():
+    """Create indexes that may be missing on existing DB (idempotent)."""
+    statements = [
+        "CREATE INDEX IF NOT EXISTS idx_sessions_username ON sessions(username)",
+        "CREATE INDEX IF NOT EXISTS idx_log_users_city ON log_users(city)",
+        "CREATE INDEX IF NOT EXISTS idx_log_users_last_seen ON log_users(last_seen)",
+    ]
+    with engine.begin() as conn:
+        for stmt in statements:
+            conn.execute(text(stmt))
