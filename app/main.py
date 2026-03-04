@@ -2,6 +2,7 @@
 # app/main.py
 import asyncio
 import logging
+import threading
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
@@ -14,6 +15,8 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 # ============= RATE LIMITER =============
+_rate_lock = threading.Lock()
+
 _login_attempts: dict[str, list[datetime]] = defaultdict(list)
 _LOGIN_MAX_ATTEMPTS = 10   # попыток с одного IP за окно
 _LOGIN_WINDOW_SEC   = 60   # окно в секундах
@@ -25,34 +28,36 @@ _USER_LOCK_SEC   = 300     # блокировка на 5 минут
 
 def _check_rate_limit(ip: str) -> bool:
     """Возвращает True если IP-лимит не превышен."""
-    now = datetime.now()
-    cutoff = now - timedelta(seconds=_LOGIN_WINDOW_SEC)
-    _login_attempts[ip] = [t for t in _login_attempts[ip] if t > cutoff]
-    if len(_login_attempts[ip]) >= _LOGIN_MAX_ATTEMPTS:
-        return False
-    _login_attempts[ip].append(now)
-    return True
+    with _rate_lock:
+        now = datetime.now()
+        cutoff = now - timedelta(seconds=_LOGIN_WINDOW_SEC)
+        _login_attempts[ip] = [t for t in _login_attempts[ip] if t > cutoff]
+        if len(_login_attempts[ip]) >= _LOGIN_MAX_ATTEMPTS:
+            return False
+        _login_attempts[ip].append(now)
+        return True
 
 def _check_user_lockout(username: str) -> bool:
     """Возвращает True если аккаунт не заблокирован."""
-    locked_until = _user_locked_until.get(username)
-    if locked_until and datetime.now() < locked_until:
-        return False
-    return True
+    with _rate_lock:
+        locked_until = _user_locked_until.get(username)
+        return not (locked_until and datetime.now() < locked_until)
 
 def _record_failed_login(username: str) -> None:
     """Фиксирует неудачную попытку входа; блокирует аккаунт при превышении лимита."""
-    _user_fail_count[username] += 1
-    if _user_fail_count[username] >= _USER_MAX_FAILS:
-        _user_locked_until[username] = datetime.now() + timedelta(seconds=_USER_LOCK_SEC)
-        _user_fail_count[username] = 0
-        logger.warning("Аккаунт %s заблокирован на %d сек после %d неудачных попыток",
-                       username, _USER_LOCK_SEC, _USER_MAX_FAILS)
+    with _rate_lock:
+        _user_fail_count[username] += 1
+        if _user_fail_count[username] >= _USER_MAX_FAILS:
+            _user_locked_until[username] = datetime.now() + timedelta(seconds=_USER_LOCK_SEC)
+            _user_fail_count[username] = 0
+            logger.warning("Аккаунт %s заблокирован на %d сек после %d неудачных попыток",
+                           username, _USER_LOCK_SEC, _USER_MAX_FAILS)
 
 def _reset_user_lockout(username: str) -> None:
     """Сбрасывает счётчик неудач при успешном входе."""
-    _user_fail_count.pop(username, None)
-    _user_locked_until.pop(username, None)
+    with _rate_lock:
+        _user_fail_count.pop(username, None)
+        _user_locked_until.pop(username, None)
 
 sys.path.append(str(Path(__file__).parent.parent))
 

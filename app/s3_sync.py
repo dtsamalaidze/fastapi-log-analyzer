@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 # app/s3_sync.py
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
@@ -12,6 +13,9 @@ except ImportError:
     BOTO3_AVAILABLE = False
 
 from app import config
+
+
+logger = logging.getLogger(__name__)
 
 
 class S3Syncer:
@@ -103,14 +107,14 @@ class S3Syncer:
                         s3.download_file(config.S3_BUCKET, key, str(local_path))
                         downloaded += 1
                     except (BotoCoreError, ClientError, OSError) as e:
-                        print(f"❌ S3 download {key}: {e}")
+                        logger.error("S3 download %s: %s", key, e, exc_info=True)
                         errors += 1
 
             self.last_sync = datetime.now()
             self.last_error = None
             self.total_downloaded += downloaded
 
-            print(f"✅ S3 sync: скачано {downloaded}, пропущено {skipped}, ошибок {errors}")
+            logger.info("S3 sync: скачано %d, пропущено %d, ошибок %d", downloaded, skipped, errors)
             return {
                 'ok': True,
                 'downloaded': downloaded,
@@ -121,7 +125,7 @@ class S3Syncer:
 
         except (BotoCoreError, ClientError) as e:
             self.last_error = str(e)
-            print(f"❌ S3 sync failed: {e}")
+            logger.error("S3 sync failed: %s", e, exc_info=True)
             return {'ok': False, 'error': str(e), 'downloaded': 0}
 
     def status(self) -> Dict:

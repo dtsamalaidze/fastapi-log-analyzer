@@ -3,7 +3,10 @@
 import re
 import os
 import glob
+import logging
 import subprocess
+import threading
+import time
 from collections import OrderedDict, Counter
 from typing import List, Dict, Tuple, Optional
 from pathlib import Path
@@ -20,6 +23,12 @@ from sqlalchemy import func
 LAST_PROCESSED_MTIME_KEY = 'logs.last_processed_mtime'
 
 
+logger = logging.getLogger(__name__)
+
+
+_USERS_CACHE_TTL = 60  # секунд
+
+
 class LogAnalyzer:
     """Класс для анализа лог-файлов"""
 
@@ -27,18 +36,21 @@ class LogAnalyzer:
         self.log_folder = log_folder
         self.global_allowed = []
         self.global_blocked = []
+        self._users_cache: Optional[List[Dict]] = None
+        self._users_cache_ts: float = 0.0
+        self._cache_lock = threading.Lock()
 
     def refresh_global_lists(self):
         """Обновляет глобальные списки из БД"""
         self.global_allowed = [app.lower() for app in global_apps_db.get_allowed_all()]
         self.global_blocked = [app.lower() for app in global_apps_db.get_blocked_all()]
-        print(
-            f"📋 Глобальные списки обновлены: разрешено {len(self.global_allowed)}, заблокировано {len(self.global_blocked)}")
+        logger.info("Глобальные списки обновлены: разрешено %d, заблокировано %d",
+                    len(self.global_allowed), len(self.global_blocked))
 
     def find_all_log_files(self) -> List[str]:
         """Находит все лог-файлы всех пользователей рекурсивно"""
         if not os.path.exists(self.log_folder):
-            print(f"⚠️ Папка не найдена: {self.log_folder}")
+            logger.warning("Папка не найдена: %s", self.log_folder)
             return []
 
         log_files = []
@@ -108,7 +120,7 @@ class LogAnalyzer:
 
                             launch_count[app_name] += 1
         except Exception as e:
-            print(f"❌ Ошибка при парсинге {os.path.basename(filename)}: {e}")
+            logger.error("Ошибка при парсинге %s: %s", os.path.basename(filename), e, exc_info=True)
 
         filename_base = os.path.basename(filename)
 
@@ -138,7 +150,7 @@ class LogAnalyzer:
         all_files = self.find_all_log_files()
 
         if not all_files:
-            print("📁 Нет лог-файлов для обработки")
+            logger.info("Нет лог-файлов для обработки")
             return {
                 'processed': 0,
                 'candidates': 0,
@@ -161,7 +173,7 @@ class LogAnalyzer:
                     max_mtime = mtime
 
         if not candidates:
-            print("📁 Нет новых лог-файлов для обработки")
+            logger.info("Нет новых лог-файлов для обработки")
             return {
                 'processed': 0,
                 'candidates': 0,
@@ -169,8 +181,8 @@ class LogAnalyzer:
                 'new_last_mtime': last_mtime
             }
 
-        print(
-            f"\n📁 Обработка {len(candidates)} лог-файлов (всего найдено: {len(all_files)}). Режим: {'полный' if force_full else 'инкрементальный'}, last_mtime={last_mtime}")
+        logger.info("Обработка %d лог-файлов (всего найдено: %d). Режим: %s, last_mtime=%s",
+                    len(candidates), len(all_files), 'полный' if force_full else 'инкрементальный', last_mtime)
 
         if force_full:
             log_app_db.clear_all()
@@ -198,15 +210,15 @@ class LogAnalyzer:
 
                     processed_count += 1
             except Exception as e:
-                print(f"❌ Ошибка обработки файла {os.path.basename(log_file)}: {e}")
+                logger.error("Ошибка обработки файла %s: %s", os.path.basename(log_file), e, exc_info=True)
 
         # Обновляем маркер обработки только если был прогресс
         if processed_count > 0:
             settings_db.set_int(LAST_PROCESSED_MTIME_KEY, int(max_mtime))
-            # Обновляем глобальные списки после обработки новых логов
             self.refresh_global_lists()
+            self.invalidate_users_cache()
 
-        print(f"✅ Обработано файлов: {processed_count}. new_last_mtime={max_mtime}")
+        logger.info("Обработано файлов: %d. new_last_mtime=%s", processed_count, max_mtime)
         return {
             'processed': processed_count,
             'candidates': len(candidates),
@@ -231,10 +243,21 @@ class LogAnalyzer:
             return 'allowed'
         return 'neutral'
 
+    def invalidate_users_cache(self) -> None:
+        """Сбрасывает кэш пользователей (вызывать после изменения данных)."""
+        with self._cache_lock:
+            self._users_cache = None
+            self._users_cache_ts = 0.0
+
     def get_all_users_data(self) -> List[Dict]:
         """Получает данные по всем пользователям с учетом правил отделов.
         Использует батч-запросы — O(1) запросов к БД вне зависимости от числа юзеров.
+        Результат кэшируется на _USERS_CACHE_TTL секунд.
         """
+        with self._cache_lock:
+            if self._users_cache is not None and (time.monotonic() - self._users_cache_ts) < _USERS_CACHE_TTL:
+                logger.debug("get_all_users_data: возврат из кэша")
+                return self._users_cache
         db = SessionLocal()
         try:
             # 1. Все пользователи с отделами
@@ -368,7 +391,10 @@ class LogAnalyzer:
                 'log_files_count': log_files_by_user.get(user_id, 1),
             })
 
-        print(f"📊 get_all_users_data: загружено {len(users_data)} пользователей")
+        logger.debug("get_all_users_data: загружено %d пользователей", len(users_data))
+        with self._cache_lock:
+            self._users_cache = users_data
+            self._users_cache_ts = time.monotonic()
         return users_data
 
     def _nslookup(self, hostname: str, timeout: int = 3) -> str:
@@ -403,17 +429,17 @@ class LogAnalyzer:
         computers = log_user_db.get_unresolved_computers()
         if not computers:
             return 0
-        print(f"🔍 Определение IP для {len(computers)} компьютеров...")
+        logger.info("Определение IP для %d компьютеров...", len(computers))
         resolved = 0
         for name in computers:
             ip = self._nslookup(name)
             log_user_db.update_computer_ip(name, ip)
             if ip:
                 resolved += 1
-                print(f"   ✅ {name} → {ip}")
+                logger.debug("IP resolved: %s → %s", name, ip)
             else:
-                print(f"   ❓ {name} → не определён")
-        print(f"🔍 Готово: определено {resolved} из {len(computers)}")
+                logger.debug("IP не определён: %s", name)
+        logger.info("IP определено: %d из %d", resolved, len(computers))
         return resolved
 
     def get_processing_status(self) -> Dict:
@@ -498,4 +524,4 @@ class LogAnalyzer:
         }
 
 
-print("✅ LogAnalyzer module initialized with department-specific rules")
+logger.info("LogAnalyzer module initialized with department-specific rules")

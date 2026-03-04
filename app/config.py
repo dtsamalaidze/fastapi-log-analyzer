@@ -44,12 +44,12 @@ DEBUG = os.environ.get('DEBUG', 'false').lower() == 'true'
 # =============================================
 # НАСТРОЙКИ АУТЕНТИФИКАЦИИ
 # =============================================
+import logging as _logging
 import secrets as _secrets
 SESSION_SECRET = os.environ.get('SESSION_SECRET', '')
 if not SESSION_SECRET:
     SESSION_SECRET = _secrets.token_hex(32)
-    print("⚠️  SESSION_SECRET не задан! Используется случайный ключ — сессии сбросятся при перезапуске.")
-    print("   Задайте SESSION_SECRET в файле .env")
+    _logging.warning("SESSION_SECRET не задан! Используется случайный ключ — сессии сбросятся при перезапуске. Задайте SESSION_SECRET в .env")
 SESSION_MAX_AGE = 3600  # 1 час
 COOKIE_SECURE = os.environ.get('COOKIE_SECURE', 'false').lower() == 'true'
 

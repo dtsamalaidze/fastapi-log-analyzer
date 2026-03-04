@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # app/database.py
 import hashlib
+import logging
 import json
 import os
 from datetime import datetime
@@ -18,6 +19,8 @@ from app.models import (
 )
 from app.db import SessionLocal, init_db
 
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_ADMIN_PERMISSIONS: Dict = {
     "users": {"view": True, "edit_profile": True},
@@ -394,7 +397,7 @@ class LogUserDB:
             self.db.flush()
             return True
         except Exception as e:
-            print(f"❌ Ошибка добавления компьютера {computer_name} для {username}: {e}")
+            logger.error("Ошибка добавления компьютера %s для %s: %s", computer_name, username, e, exc_info=True)
             return False
 
     def get_computers(self, username: str) -> List[str]:
@@ -481,7 +484,7 @@ class LogAppDB:
             self.db.execute(stmt)
             self.db.flush()
         except Exception as e:
-            print(f"❌ Ошибка добавления приложения {app_name}: {e}")
+            logger.error("Ошибка добавления приложения %s: %s", app_name, e, exc_info=True)
 
     def get_user_apps(self, user_id: int) -> List[Dict]:
         rows = (
@@ -504,7 +507,7 @@ class LogAppDB:
         self.db.query(LogAppPath).delete(synchronize_session=False)
         self.db.query(LogApp).delete(synchronize_session=False)
         self.db.flush()
-        print("🗑️  log_apps и log_app_paths очищены для полной переобработки")
+        logger.info("log_apps и log_app_paths очищены для полной переобработки")
 
     def add_or_update_path(self, user_id: int, app_name: str, computer_name: str,
                            full_path: Optional[str], launch_count: int = 1):
@@ -526,7 +529,7 @@ class LogAppDB:
             self.db.execute(stmt)
             self.db.flush()
         except Exception as e:
-            print(f"❌ Ошибка добавления пути приложения {app_name}: {e}")
+            logger.error("Ошибка добавления пути приложения %s: %s", app_name, e, exc_info=True)
 
     def get_app_users(self, app_name: str) -> List[Dict]:
         rows = (
@@ -778,7 +781,7 @@ class DatabaseManager:
             db.commit()
         except Exception as e:
             db.rollback()
-            print(f"⚠️  Ошибка при инициализации данных: {e}")
+            logger.warning("Ошибка при инициализации данных: %s", e, exc_info=True)
         finally:
             db.close()
 
@@ -860,4 +863,4 @@ settings_db = _SessionScopedProxy(SettingsDB)
 account_db = _SessionScopedProxy(AccountDB)
 role_db = _SessionScopedProxy(RolesDB)
 
-print("✅ Database module loaded (PostgreSQL/SQLAlchemy). Call db_manager.bootstrap() to initialise.")
+logger.info("Database module loaded (PostgreSQL/SQLAlchemy).")
