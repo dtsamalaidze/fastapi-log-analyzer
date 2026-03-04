@@ -141,11 +141,13 @@ export default function UsersPage() {
   const { data: users = [], isLoading } = useQuery({
     queryKey: ['users'],
     queryFn: api.getUsers,
+    staleTime: 60_000,
   })
 
   const { data: stats } = useQuery({
     queryKey: ['stats'],
     queryFn: api.getStats,
+    staleTime: 60_000,
   })
 
   const toggleExpand = (username: string) => {

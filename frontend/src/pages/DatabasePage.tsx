@@ -46,6 +46,7 @@ export default function DatabasePage() {
   const qc = useQueryClient()
 
   const [vacuumDone, setVacuumDone] = useState(false)
+  const [clearConfirmText, setClearConfirmText] = useState('')
 
   const handleBackup = () => {
     window.open('/api/db/backup', '_blank')
@@ -83,6 +84,7 @@ export default function DatabasePage() {
     mutationFn: (days?: number) => api.clearLogs(days),
     onSuccess: res => {
       setClearModal(null)
+      setClearConfirmText('')
       qc.invalidateQueries({ queryKey: ['db-stats'] })
       const total = Object.values(res.deleted).reduce((a, b) => a + b, 0)
       showToast(`Удалено ${total} записей`, 'success')
@@ -290,7 +292,7 @@ export default function DatabasePage() {
       <Modal
         open={clearModal === 'all'}
         title="Очистить все лог-данные"
-        onClose={() => setClearModal(null)}
+        onClose={() => { setClearModal(null); setClearConfirmText('') }}
       >
         <div className="space-y-4">
           <div className="flex gap-3 p-4 bg-red-50 rounded-xl">
@@ -307,12 +309,24 @@ export default function DatabasePage() {
               </ul>
             </div>
           </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">
+              Для подтверждения введите <span className="font-mono font-bold text-red-600">УДАЛИТЬ</span>
+            </label>
+            <input
+              type="text"
+              value={clearConfirmText}
+              onChange={e => setClearConfirmText(e.target.value)}
+              placeholder="УДАЛИТЬ"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+            />
+          </div>
           <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setClearModal(null)}>Отмена</Button>
+            <Button variant="secondary" onClick={() => { setClearModal(null); setClearConfirmText('') }}>Отмена</Button>
             <button
               onClick={() => clearMutation.mutate(undefined)}
-              disabled={clearMutation.isPending}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-red-600 text-white hover:bg-red-700 disabled:opacity-60 transition-colors"
+              disabled={clearMutation.isPending || clearConfirmText !== 'УДАЛИТЬ'}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-red-600 text-white hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
             >
               {clearMutation.isPending ? <Spinner size="sm" /> : <Trash2 className="w-4 h-4" />}
               Удалить всё

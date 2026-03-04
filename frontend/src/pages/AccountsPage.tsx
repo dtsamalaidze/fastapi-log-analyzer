@@ -888,6 +888,7 @@ function AccountsTabWithCreate({ currentUser }: { currentUser: string }) {
   const { data, isLoading, isError } = useQuery({
     queryKey: ['accounts'],
     queryFn: () => api.getAccounts(),
+    staleTime: 5 * 60_000,
   })
 
   const accounts: SystemAccount[] = data?.accounts ?? []

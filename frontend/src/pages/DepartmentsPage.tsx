@@ -36,10 +36,12 @@ export default function DepartmentsPage() {
   const { data: deptData, isLoading: loadingDepts } = useQuery({
     queryKey: ['departments'],
     queryFn: api.getDepartments,
+    staleTime: 5 * 60_000,
   })
   const { data: users = [], isLoading: loadingUsers } = useQuery({
     queryKey: ['users'],
     queryFn: api.getUsers,
+    staleTime: 60_000,
   })
 
   const departments = deptData?.departments ?? []

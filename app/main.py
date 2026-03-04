@@ -5,7 +5,7 @@ import logging
 import threading
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -158,11 +158,32 @@ except Exception as e:
 analyzer = LogAnalyzer(log_folder=config.LOG_FOLDER)
 
 
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+
+
 # ============= АУТЕНТИФИКАЦИЯ =============
 
 def get_current_user(request: Request):
     """Получает текущего пользователя"""
     return auth_manager.get_current_user(request)
+
+
+def require_auth(request: Request) -> dict:
+    """FastAPI dependency: требует авторизации."""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Не авторизован")
+    return user
+
+
+def require_admin(request: Request) -> dict:
+    """FastAPI dependency: требует роли admin."""
+    user = get_current_user(request)
+    if not user or user['role'] != 'admin':
+        raise HTTPException(status_code=403, detail="Доступ запрещён")
+    return user
 
 
 def get_user_data_scope(request: Request) -> dict:
@@ -299,7 +320,7 @@ async def add_global_allowed(request: Request):
             return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
 
         data = await request.json()
-        app_name = data.get('app_name')
+        app_name = (data.get('app_name') or '').strip()
         if not app_name:
             return JSONResponse(status_code=400, content={"error": "Не указано имя приложения"})
 
@@ -307,6 +328,8 @@ async def add_global_allowed(request: Request):
         global_apps_manager.remove_blocked_app(app_name)
 
         success = global_apps_manager.add_allowed_app(app_name, user['username'])
+        if success:
+            logger.info("AUDIT | user=%s | add_global_allowed | app=%s", user['username'], app_name)
 
         return JSONResponse({
             "success": success,
@@ -327,11 +350,12 @@ async def remove_global_allowed(request: Request):
             return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
 
         data = await request.json()
-        app_name = data.get('app_name')
+        app_name = (data.get('app_name') or '').strip()
         if not app_name:
             return JSONResponse(status_code=400, content={"error": "Не указано имя приложения"})
 
         success = global_apps_manager.remove_allowed_app(app_name)
+        logger.info("AUDIT | user=%s | remove_global_allowed | app=%s", user['username'], app_name)
 
         return JSONResponse({
             "success": success,
@@ -368,7 +392,7 @@ async def add_global_blocked(request: Request):
             return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
 
         data = await request.json()
-        app_name = data.get('app_name')
+        app_name = (data.get('app_name') or '').strip()
         if not app_name:
             return JSONResponse(status_code=400, content={"error": "Не указано имя приложения"})
 
@@ -376,6 +400,8 @@ async def add_global_blocked(request: Request):
         global_apps_manager.remove_allowed_app(app_name)
 
         success = global_apps_manager.add_blocked_app(app_name, user['username'])
+        if success:
+            logger.info("AUDIT | user=%s | add_global_blocked | app=%s", user['username'], app_name)
 
         return JSONResponse({
             "success": success,
@@ -396,11 +422,12 @@ async def remove_global_blocked(request: Request):
             return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
 
         data = await request.json()
-        app_name = data.get('app_name')
+        app_name = (data.get('app_name') or '').strip()
         if not app_name:
             return JSONResponse(status_code=400, content={"error": "Не указано имя приложения"})
 
         success = global_apps_manager.remove_blocked_app(app_name)
+        logger.info("AUDIT | user=%s | remove_global_blocked | app=%s", user['username'], app_name)
 
         return JSONResponse({
             "success": success,
@@ -436,12 +463,14 @@ async def add_department(request: Request):
             return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
 
         data = await request.json()
-        name = data.get('name')
+        name = (data.get('name') or '').strip()
 
         if not name:
             return JSONResponse(status_code=400, content={"error": "Не указано название отдела"})
 
         success = department_manager.add_department(name, user['username'])
+        if success:
+            logger.info("AUDIT | user=%s | add_department | name=%s", user['username'], name)
 
         return JSONResponse({
             "success": success,
@@ -461,12 +490,14 @@ async def remove_department(request: Request):
             return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
 
         data = await request.json()
-        name = data.get('name')
+        name = (data.get('name') or '').strip()
 
         if not name:
             return JSONResponse(status_code=400, content={"error": "Не указано название отдела"})
 
         success = department_manager.remove_department(name)
+        if success:
+            logger.info("AUDIT | user=%s | remove_department | name=%s", user['username'], name)
 
         return JSONResponse({
             "success": success,
@@ -527,7 +558,7 @@ async def add_department_allowed(department_name: str, request: Request):
             return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
 
         data = await request.json()
-        app_name = data.get('app_name')
+        app_name = (data.get('app_name') or '').strip()
         if not app_name:
             return JSONResponse(status_code=400, content={"error": "Не указано имя приложения"})
 
@@ -554,7 +585,7 @@ async def remove_department_allowed(department_name: str, request: Request):
             return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
 
         data = await request.json()
-        app_name = data.get('app_name')
+        app_name = (data.get('app_name') or '').strip()
         if not app_name:
             return JSONResponse(status_code=400, content={"error": "Не указано имя приложения"})
 
@@ -578,7 +609,7 @@ async def add_department_blocked(department_name: str, request: Request):
             return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
 
         data = await request.json()
-        app_name = data.get('app_name')
+        app_name = (data.get('app_name') or '').strip()
         if not app_name:
             return JSONResponse(status_code=400, content={"error": "Не указано имя приложения"})
 
@@ -605,7 +636,7 @@ async def remove_department_blocked(department_name: str, request: Request):
             return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
 
         data = await request.json()
-        app_name = data.get('app_name')
+        app_name = (data.get('app_name') or '').strip()
         if not app_name:
             return JSONResponse(status_code=400, content={"error": "Не указано имя приложения"})
 
@@ -1164,7 +1195,7 @@ async def update_account(username: str, request: Request):
         return JSONResponse(status_code=403, content={"error": "Доступ запрещён"})
     try:
         data = await request.json()
-        name = data.get('name')
+        name = (data.get('name') or '').strip()
         role = data.get('role')
 
         if role and role not in ('admin', 'viewer'):
@@ -1206,6 +1237,7 @@ async def update_account_password(username: str, request: Request):
         success = account_db.update_password(username, password)
         if success:
             session_db.delete_sessions_by_username(username)
+            logger.info("AUDIT | user=%s | change_password | target=%s", user['username'], username)
             return JSONResponse({"success": True, "message": "Пароль изменён"})
         return JSONResponse(status_code=404, content={"error": "Аккаунт не найден"})
     except Exception as e:
@@ -1229,6 +1261,7 @@ async def delete_account(username: str, request: Request):
 
         success = account_db.delete(username)
         if success:
+            logger.info("AUDIT | user=%s | delete_account | target=%s", user['username'], username)
             return JSONResponse({"success": True, "message": f"Аккаунт '{username}' удалён"})
         return JSONResponse(status_code=404, content={"error": "Аккаунт не найден"})
     except Exception as e:

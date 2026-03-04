@@ -947,6 +947,7 @@ function ComputerDetailPanel({ computerName, onClose }: { computerName: string; 
   const { data, isLoading } = useQuery({
     queryKey: ['computer-users', computerName],
     queryFn: () => api.getComputerUsers(computerName),
+    staleTime: 60_000,
   })
   const users: ComputerUserEntry[] = data?.users ?? []
   const ip = data?.ip_address
@@ -1119,10 +1120,12 @@ function DepartmentsReport({ dateFrom, dateTo, statusFilters }: FilterProps) {
   const { data: depts = [], isLoading: loadingDepts } = useQuery({
     queryKey: ['reports/departments'],
     queryFn: api.getDepartmentsReport,
+    staleTime: 60_000,
   })
   const { data: users = [], isLoading: loadingUsers } = useQuery({
     queryKey: ['reports/users'],
     queryFn: api.getUsersReport,
+    staleTime: 60_000,
   })
 
   const isLoading = loadingDepts || loadingUsers

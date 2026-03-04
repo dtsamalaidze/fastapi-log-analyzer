@@ -221,14 +221,17 @@ function GlobalRules() {
   const { data: allowed, isLoading: loadingA } = useQuery({
     queryKey: ['global/allowed'],
     queryFn: api.getGlobalAllowed,
+    staleTime: 5 * 60_000,
   })
   const { data: blocked, isLoading: loadingB } = useQuery({
     queryKey: ['global/blocked'],
     queryFn: api.getGlobalBlocked,
+    staleTime: 5 * 60_000,
   })
   const { data: appsReport = [], isLoading: loadingReport } = useQuery({
     queryKey: ['reports/apps'],
     queryFn: api.getAppsReport,
+    staleTime: 60_000,
   })
 
   // Нейтральные = все приложения из отчёта, не входящие ни в один список
@@ -361,11 +364,13 @@ function DeptAccordion({
     queryKey: ['dept-apps', dept],
     queryFn: () => api.getDepartmentApps(dept),
     enabled: open,
+    staleTime: 5 * 60_000,
   })
   const { data: appsReport = [], isLoading: loadingReport } = useQuery({
     queryKey: ['reports/apps'],
     queryFn: api.getAppsReport,
     enabled: open,
+    staleTime: 60_000,
   })
 
   // Нейтральные для отдела = все приложения, не попавшие в списки отдела

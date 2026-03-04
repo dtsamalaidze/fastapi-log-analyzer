@@ -836,16 +836,19 @@ class _SessionScopedProxy:
 
     def __getattr__(self, name: str):
         def wrapper(*args, **kwargs):
-            db = SessionLocal()
+            db = None
             try:
+                db = SessionLocal()
                 result = getattr(self._cls(db), name)(*args, **kwargs)
                 db.commit()
                 return result
             except Exception:
-                db.rollback()
+                if db is not None:
+                    db.rollback()
                 raise
             finally:
-                db.close()
+                if db is not None:
+                    db.close()
         return wrapper
 
 
