@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # app/main.py
 import asyncio
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
@@ -8,8 +9,25 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
+
+# ============= RATE LIMITER =============
+_login_attempts: dict[str, list[datetime]] = defaultdict(list)
+_LOGIN_MAX_ATTEMPTS = 10   # попыток
+_LOGIN_WINDOW_SEC   = 60   # за 60 секунд
+
+def _check_rate_limit(ip: str) -> bool:
+    """Возвращает True если лимит не превышен, False если заблокирован."""
+    now = datetime.now()
+    cutoff = now - timedelta(seconds=_LOGIN_WINDOW_SEC)
+    attempts = _login_attempts[ip]
+    # удаляем старые попытки
+    _login_attempts[ip] = [t for t in attempts if t > cutoff]
+    if len(_login_attempts[ip]) >= _LOGIN_MAX_ATTEMPTS:
+        return False
+    _login_attempts[ip].append(now)
+    return True
 
 sys.path.append(str(Path(__file__).parent.parent))
 
@@ -144,6 +162,9 @@ def apply_data_scope(users_data: list, data_scope: dict) -> list:
 async def api_login(request: Request):
     """JSON-аутентификация для React SPA"""
     try:
+        ip = request.client.host if request.client else 'unknown'
+        if not _check_rate_limit(ip):
+            return JSONResponse(status_code=429, content={"error": "Слишком много попыток входа. Подождите минуту."})
         data = await request.json()
         username = data.get('username', '')
         password = data.get('password', '')
@@ -160,7 +181,7 @@ async def api_login(request: Request):
                 value=token,
                 max_age=config.SESSION_MAX_AGE,
                 httponly=True,
-                secure=False,
+                secure=config.COOKIE_SECURE,
                 samesite="lax",
                 path="/"
             )
@@ -1302,7 +1323,13 @@ async def backup_db(request: Request):
 
         def run_dump():
             result = subprocess.run(
-                [pg_dump_bin, db_url],
+                [
+                    pg_dump_bin,
+                    '-h', parsed.hostname or 'localhost',
+                    '-p', str(parsed.port or 5432),
+                    '-U', parsed.username or 'postgres',
+                    parsed.path.lstrip('/'),
+                ],
                 capture_output=True,
                 env=env,
                 timeout=300,
@@ -1364,6 +1391,11 @@ async def clear_logs_db(request: Request):
 
         data = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
         older_than_days = data.get('older_than_days')
+
+        if older_than_days is None and not data.get('confirm_delete_all'):
+            return JSONResponse(status_code=400, content={
+                "error": "Для полной очистки передайте confirm_delete_all: true"
+            })
 
         loop = asyncio.get_running_loop()
 

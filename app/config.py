@@ -51,6 +51,7 @@ if not SESSION_SECRET:
     print("⚠️  SESSION_SECRET не задан! Используется случайный ключ — сессии сбросятся при перезапуске.")
     print("   Задайте SESSION_SECRET в файле .env")
 SESSION_MAX_AGE = 3600  # 1 час
+COOKIE_SECURE = os.environ.get('COOKIE_SECURE', 'false').lower() == 'true'
 
 # =============================================
 # YANDEX OBJECT STORAGE (S3-совместимое)

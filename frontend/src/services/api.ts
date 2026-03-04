@@ -141,7 +141,7 @@ export const api = {
   ),
   clearLogs: (older_than_days?: number) => request<{ success: boolean; deleted: Record<string, number> }>(
     '/api/db/clear-logs',
-    { method: 'POST', body: JSON.stringify(older_than_days != null ? { older_than_days } : {}) }
+    { method: 'POST', body: JSON.stringify(older_than_days != null ? { older_than_days } : { confirm_delete_all: true }) }
   ),
 
   // My permissions
