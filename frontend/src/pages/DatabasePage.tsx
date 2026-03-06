@@ -55,7 +55,7 @@ export default function DatabasePage() {
   const [clearModal, setClearModal] = useState<'all' | 'partial' | null>(null)
   const [olderThanDays, setOlderThanDays] = useState('30')
 
-  const { data: stats, isLoading, refetch } = useQuery({
+  const { data: stats, isLoading, isFetching, refetch } = useQuery({
     queryKey: ['db-stats'],
     queryFn: api.getDbStats,
     refetchOnWindowFocus: false,
@@ -110,8 +110,8 @@ export default function DatabasePage() {
             Обслуживание и мониторинг PostgreSQL
           </p>
         </div>
-        <Button variant="secondary" size="sm" onClick={() => refetch()}>
-          <RefreshCw className="w-4 h-4" /> Обновить
+        <Button variant="secondary" size="sm" onClick={() => refetch()} loading={isFetching}>
+          <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} /> Обновить
         </Button>
       </div>
 
