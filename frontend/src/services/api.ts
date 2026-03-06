@@ -1,20 +1,32 @@
 import type { AuthCheckResponse, UserData, Stats, DepartmentApps, AppReport, ComputerReport, DepartmentReport, AppUserEntry, ComputerUserEntry, SystemAccount, UserPermissions, PermissionRole } from '../types'
 
+const REQUEST_TIMEOUT_MS = 30_000
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    ...options,
-  })
-  if (res.status === 401 && url !== '/api/auth/login' && url !== '/api/auth-check') {
-    window.location.href = '/login'
-    return Promise.reject(new Error('Сессия истекла'))
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  try {
+    const res = await fetch(url, {
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', ...options?.headers },
+      ...options,
+      signal: controller.signal,
+    })
+    if (res.status === 401 && url !== '/api/auth/login' && url !== '/api/auth-check') {
+      window.location.href = '/login'
+      return Promise.reject(new Error('Сессия истекла'))
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }))
+      throw new Error(err.error || `HTTP ${res.status}`)
+    }
+    return res.json()
+  } catch (e: unknown) {
+    if (e instanceof Error && e.name === 'AbortError') throw new Error('Превышено время ожидания запроса')
+    throw e
+  } finally {
+    clearTimeout(timer)
   }
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }))
-    throw new Error(err.error || `HTTP ${res.status}`)
-  }
-  return res.json()
 }
 
 export const api = {
@@ -74,6 +86,14 @@ export const api = {
     request<{ success: boolean }>(`/api/users/${encodeURIComponent(username)}/profile`, {
       method: 'POST',
       body: JSON.stringify(profile),
+    }),
+  setProfilesBatch: (profiles: Array<{
+    username: string; last_name: string; first_name: string; middle_name: string
+    city: string; address: string; telegram: string
+  }>) =>
+    request<{ results: Array<{ username: string; success: boolean }> }>('/api/users/profiles/batch', {
+      method: 'POST',
+      body: JSON.stringify(profiles),
     }),
 
   setUserDepartment: (username: string, department: string | null) =>

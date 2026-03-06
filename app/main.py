@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 # app/main.py
 import asyncio
+import hashlib
+import json
 import logging
 import threading
+import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,10 +34,14 @@ def _check_rate_limit(ip: str) -> bool:
     with _rate_lock:
         now = datetime.now()
         cutoff = now - timedelta(seconds=_LOGIN_WINDOW_SEC)
-        _login_attempts[ip] = [t for t in _login_attempts[ip] if t > cutoff]
-        if len(_login_attempts[ip]) >= _LOGIN_MAX_ATTEMPTS:
+        attempts = [t for t in _login_attempts[ip] if t > cutoff]
+        if not attempts:
+            _login_attempts.pop(ip, None)
+        else:
+            _login_attempts[ip] = attempts
+        if len(_login_attempts.get(ip, [])) >= _LOGIN_MAX_ATTEMPTS:
             return False
-        _login_attempts[ip].append(now)
+        _login_attempts[ip] = _login_attempts.get(ip, []) + [now]
         return True
 
 def _check_user_lockout(username: str) -> bool:
@@ -58,6 +65,40 @@ def _reset_user_lockout(username: str) -> None:
     with _rate_lock:
         _user_fail_count.pop(username, None)
         _user_locked_until.pop(username, None)
+
+
+# ============= КЭША ОТЧЁТОВ =============
+_REPORT_CACHE_TTL = 60  # секунд
+
+class _ReportCache:
+    """Простой TTL-кэш агрегированных отчётов, ключ = (endpoint, hash(scope))."""
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._data: dict[str, tuple[float, object]] = {}
+
+    def _scope_key(self, endpoint: str, scope: dict) -> str:
+        h = hashlib.md5(json.dumps(scope, sort_keys=True).encode()).hexdigest()
+        return f"{endpoint}:{h}"
+
+    def get(self, endpoint: str, scope: dict):
+        key = self._scope_key(endpoint, scope)
+        with self._lock:
+            entry = self._data.get(key)
+            if entry and (time.monotonic() - entry[0]) < _REPORT_CACHE_TTL:
+                return entry[1]
+        return None
+
+    def set(self, endpoint: str, scope: dict, value):
+        key = self._scope_key(endpoint, scope)
+        with self._lock:
+            self._data[key] = (time.monotonic(), value)
+
+    def invalidate(self):
+        with self._lock:
+            self._data.clear()
+
+_report_cache = _ReportCache()
+
 
 sys.path.append(str(Path(__file__).parent.parent))
 
@@ -141,6 +182,24 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "Cookie"],
 )
+
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response as StarletteResponse
+
+class CSRFMiddleware(BaseHTTPMiddleware):
+    """Проверяет Origin для state-changing запросов к API."""
+    _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+    async def dispatch(self, request: Request, call_next):
+        if request.method not in self._SAFE_METHODS and request.url.path.startswith("/api/"):
+            origin = request.headers.get("origin") or request.headers.get("referer", "")
+            allowed = any(origin.startswith(o) for o in config.CORS_ORIGINS)
+            if origin and not allowed:
+                logger.warning("CSRF blocked: origin=%s path=%s", origin, request.url.path)
+                return StarletteResponse("Forbidden", status_code=403)
+        return await call_next(request)
+
+app.add_middleware(CSRFMiddleware)
 
 # Создаем директории
 config.STATIC_DIR.mkdir(exist_ok=True)
@@ -269,11 +328,20 @@ async def api_logout(request: Request):
 # ============= API =============
 
 @app.get("/api/users")
-async def get_users(request: Request):
-    """API для получения данных пользователей со статусами приложений"""
+async def get_users(
+    request: Request,
+    page: Optional[int] = Query(None, ge=1),
+    limit: Optional[int] = Query(None, ge=1, le=500),
+):
+    """API для получения данных пользователей. Поддерживает пагинацию: ?page=1&limit=50."""
     try:
         users_data = analyzer.get_all_users_data()
         users_data = apply_data_scope(users_data, get_user_data_scope(request))
+        total = len(users_data)
+        if page is not None and limit is not None:
+            start = (page - 1) * limit
+            users_data = users_data[start: start + limit]
+            return JSONResponse(content={"items": users_data, "total": total, "page": page, "limit": limit})
         return JSONResponse(content=users_data)
     except Exception as e:
         logger.error("Ошибка в /api/users: %s", e, exc_info=True)
@@ -511,6 +579,9 @@ async def remove_department(request: Request):
 @app.post("/api/departments/set-user")
 async def set_user_department(request: Request):
     """Устанавливает отдел пользователя"""
+    user = get_current_user(request)
+    if not user or user['role'] != 'admin':
+        return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
     try:
         data = await request.json()
         username = data.get('username')
@@ -666,6 +737,7 @@ async def process_logs(request: Request):
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, lambda: analyzer.process_log_files(force_full=force_full))
         await loop.run_in_executor(None, analyzer.resolve_computer_ips)
+        _report_cache.invalidate()
         return JSONResponse(content={"success": True, "result": result})
     except Exception as e:
         logger.error("Ошибка в /api/logs/process: %s", e, exc_info=True)
@@ -688,11 +760,20 @@ async def logs_status(request: Request):
 # ============= API ДЛЯ ОТЧЕТОВ =============
 
 @app.get("/api/reports/users")
-async def get_users_report(request: Request):
-    """Получает данные для отчета по пользователям со статусами приложений"""
+async def get_users_report(
+    request: Request,
+    page: Optional[int] = Query(None, ge=1),
+    limit: Optional[int] = Query(None, ge=1, le=500),
+):
+    """Получает данные для отчета по пользователям. Поддерживает пагинацию: ?page=1&limit=50."""
     try:
         users_data = analyzer.get_all_users_data()
         users_data = apply_data_scope(users_data, get_user_data_scope(request))
+        total = len(users_data)
+        if page is not None and limit is not None:
+            start = (page - 1) * limit
+            users_data = users_data[start: start + limit]
+            return JSONResponse(content={"items": users_data, "total": total, "page": page, "limit": limit})
         return JSONResponse(content=users_data)
     except Exception as e:
         logger.error("Ошибка в /api/reports/users: %s", e, exc_info=True)
@@ -703,8 +784,13 @@ async def get_users_report(request: Request):
 async def get_apps_report(request: Request):
     """Получает данные для отчета по приложениям"""
     try:
+        scope = get_user_data_scope(request)
+        cached = _report_cache.get("apps", scope)
+        if cached is not None:
+            return JSONResponse(content=cached)
+
         users_data = analyzer.get_all_users_data()
-        users_data = apply_data_scope(users_data, get_user_data_scope(request))
+        users_data = apply_data_scope(users_data, scope)
 
         # Собираем статистику по приложениям
         apps_stats = {}
@@ -759,6 +845,7 @@ async def get_apps_report(request: Request):
                 'status_counts': stats['status_counts']
             })
 
+        _report_cache.set("apps", scope, result)
         return JSONResponse(content=result)
     except Exception as e:
         logger.error("Ошибка в /api/reports/apps: %s", e, exc_info=True)
@@ -769,9 +856,14 @@ async def get_apps_report(request: Request):
 async def get_computers_report(request: Request):
     """Получает данные для отчета по компьютерам"""
     try:
+        scope = get_user_data_scope(request)
+        cached = _report_cache.get("computers", scope)
+        if cached is not None:
+            return JSONResponse(content=cached)
+
         from app.database import log_user_db
         users_data = analyzer.get_all_users_data()
-        users_data = apply_data_scope(users_data, get_user_data_scope(request))
+        users_data = apply_data_scope(users_data, scope)
 
         # Загружаем IP-адреса из БД
         ip_map = {c['name']: c['ip_address'] for c in log_user_db.get_all_computers_with_ips()}
@@ -809,6 +901,7 @@ async def get_computers_report(request: Request):
                 'status_counts': stats['status_counts']
             })
 
+        _report_cache.set("computers", scope, result)
         return JSONResponse(content=result)
     except Exception as e:
         logger.error("Ошибка в /api/reports/computers: %s", e, exc_info=True)
@@ -819,8 +912,13 @@ async def get_computers_report(request: Request):
 async def get_departments_report(request: Request):
     """Получает данные для отчета по отделам"""
     try:
+        scope = get_user_data_scope(request)
+        cached = _report_cache.get("departments", scope)
+        if cached is not None:
+            return JSONResponse(content=cached)
+
         users_data = analyzer.get_all_users_data()
-        users_data = apply_data_scope(users_data, get_user_data_scope(request))
+        users_data = apply_data_scope(users_data, scope)
         departments = department_manager.get_departments_with_stats()
 
         # Собираем статистику по отделам
@@ -898,6 +996,7 @@ async def get_departments_report(request: Request):
                         stats['users']) > 0 else 0
                 })
 
+        _report_cache.set("departments", scope, result)
         return JSONResponse(content=result)
     except Exception as e:
         logger.error("Ошибка в /api/reports/departments: %s", e, exc_info=True)
@@ -962,6 +1061,30 @@ async def health_check():
     }
 
 # ============= ФИО ПОЛЬЗОВАТЕЛЯ =============
+
+@app.post("/api/users/profiles/batch")
+async def set_user_profiles_batch(request: Request):
+    """Обновляет профили нескольких пользователей за один запрос (admin или edit_profile)."""
+    user = get_current_user(request)
+    if not user:
+        return JSONResponse(status_code=401, content={"error": "Не авторизован"})
+    if user['role'] != 'admin':
+        from app.database import account_db as _acct_db
+        perms = _acct_db.get_permissions(user['username']) or {}
+        if not perms.get('users', {}).get('edit_profile'):
+            return JSONResponse(status_code=403, content={"error": "Доступ запрещён"})
+    try:
+        profiles = await request.json()
+        if not isinstance(profiles, list) or len(profiles) > 500:
+            return JSONResponse(status_code=400, content={"error": "Ожидается массив до 500 элементов"})
+        from app.database import log_user_db
+        results = log_user_db.set_profiles_batch(profiles)
+        analyzer.invalidate_users_cache()
+        return JSONResponse({"results": results})
+    except Exception as e:
+        logger.error("Ошибка в /api/users/profiles/batch: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
+
 
 @app.post("/api/users/{username}/profile")
 async def set_user_profile(username: str, request: Request):
@@ -1175,8 +1298,8 @@ async def create_account(request: Request):
             return JSONResponse(status_code=400, content={"error": "Логин, пароль и имя обязательны"})
         if role not in ('admin', 'viewer'):
             return JSONResponse(status_code=400, content={"error": "Неверная роль"})
-        if len(password) < 6:
-            return JSONResponse(status_code=400, content={"error": "Пароль должен быть не менее 6 символов"})
+        if len(password) < 8:
+            return JSONResponse(status_code=400, content={"error": "Пароль должен быть не менее 8 символов"})
 
         from app.database import account_db
         success = account_db.create(username, password, name, role)
@@ -1230,8 +1353,8 @@ async def update_account_password(username: str, request: Request):
     try:
         data = await request.json()
         password = data.get('password', '').strip()
-        if not password or len(password) < 6:
-            return JSONResponse(status_code=400, content={"error": "Пароль должен быть не менее 6 символов"})
+        if not password or len(password) < 8:
+            return JSONResponse(status_code=400, content={"error": "Пароль должен быть не менее 8 символов"})
 
         from app.database import account_db, session_db
         success = account_db.update_password(username, password)

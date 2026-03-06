@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Any
 
 from sqlalchemy import func, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -122,6 +123,9 @@ class SessionDB:
         deleted = self.db.query(SessionModel).filter(SessionModel.username == username).delete()
         return deleted
 
+    def extend_session(self, token: str, expires_at: datetime) -> None:
+        self.db.query(SessionModel).filter(SessionModel.token == token).update({'expires_at': expires_at})
+
 
 class DepartmentDB:
     """Работа с отделами"""
@@ -170,9 +174,9 @@ class DepartmentDB:
             self.db.add(dept)
             self.db.flush()
             return True
-        except Exception:
+        except IntegrityError:
             self.db.rollback()
-            return False
+            return False  # дубликат имени
 
     def remove(self, name: str) -> bool:
         deleted = self.db.query(Department).filter(Department.name == name).delete()
@@ -358,6 +362,32 @@ class LogUserDB:
             })
         )
         return updated > 0
+
+    def set_profiles_batch(self, profiles: list[dict]) -> list[dict]:
+        """Обновляет профили нескольких пользователей в одной транзакции.
+        Каждый элемент: {username, last_name, first_name, middle_name, city, address, telegram}.
+        Возвращает [{username, success}].
+        """
+        results = []
+        for p in profiles:
+            username = p.get('username', '')
+            if not username:
+                results.append({'username': username, 'success': False})
+                continue
+            updated = (
+                self.db.query(LogUser)
+                .filter(LogUser.username == username)
+                .update({
+                    'last_name': p.get('last_name') or None,
+                    'first_name': p.get('first_name') or None,
+                    'middle_name': p.get('middle_name') or None,
+                    'city': p.get('city') or None,
+                    'address': p.get('address') or None,
+                    'telegram': p.get('telegram') or None,
+                })
+            )
+            results.append({'username': username, 'success': updated > 0})
+        return results
 
     def get_department(self, username: str) -> Optional[Dict]:
         row = (

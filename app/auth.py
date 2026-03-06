@@ -4,7 +4,6 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 from fastapi import Request
-
 from app.database import (
     user_db, session_db, department_db, global_apps_db,
     department_apps_db, log_user_db
@@ -26,10 +25,14 @@ class AuthManager:
         return None
 
     def verify_session(self, token: str) -> Optional[str]:
-        """Проверяет валидность сессии"""
+        """Проверяет валидность сессии. Продлевает TTL если осталось менее половины."""
         session = session_db.get_session(token)
         if session:
-            if datetime.now() < session['expires_at']:
+            now = datetime.now()
+            if now < session['expires_at']:
+                remaining = (session['expires_at'] - now).total_seconds()
+                if remaining < SESSION_MAX_AGE / 2:
+                    session_db.extend_session(token, now + timedelta(seconds=SESSION_MAX_AGE))
                 return session['username']
             else:
                 session_db.delete_session(token)
