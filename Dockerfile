@@ -2,6 +2,9 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
+# Системные зависимости (postgresql-client для pg_dump)
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client && rm -rf /var/lib/apt/lists/*
+
 # Зависимости
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

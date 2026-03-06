@@ -108,9 +108,11 @@ async def backup_db(request: Request):
         parsed = urllib.parse.urlparse(db_url)
 
         pg_dump_candidates = [
+            '/usr/bin/pg_dump',
+            '/opt/homebrew/opt/postgresql@17/bin/pg_dump',
+            '/opt/homebrew/opt/postgresql@16/bin/pg_dump',
             '/opt/homebrew/opt/postgresql@15/bin/pg_dump',
             '/usr/local/bin/pg_dump',
-            'pg_dump',
         ]
         pg_dump_bin = next((p for p in pg_dump_candidates if os.path.isfile(p)), 'pg_dump')
 
