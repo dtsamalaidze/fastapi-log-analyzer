@@ -32,7 +32,6 @@ LOG_FOLDER = os.environ.get('LOG_FOLDER', DEFAULT_LOG_FOLDER)
 # ПУТИ К ПАПКАМ С ДАННЫМИ
 # =============================================
 DATA_FOLDER = BASE_DIR / 'data'
-DATABASE_PATH = DATA_FOLDER / 'analyzer.db'
 
 # =============================================
 # НАСТРОЙКИ СЕРВЕРА
@@ -83,5 +82,4 @@ CORS_ORIGINS: list[str] = [
 # =============================================
 # ПУТИ ПРОЕКТА
 # =============================================
-TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"

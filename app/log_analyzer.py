@@ -18,7 +18,7 @@ from app.database import (
 )
 from app.db import SessionLocal
 from app.models import LogUser, LogApp, Department, DepartmentAllowedApp, DepartmentBlockedApp, Computer, UserComputer
-from sqlalchemy import func
+from sqlalchemy import func, or_, Date
 
 LAST_PROCESSED_MTIME_KEY = 'logs.last_processed_mtime'
 
@@ -249,18 +249,153 @@ class LogAnalyzer:
             self._users_cache = None
             self._users_cache_ts = 0.0
 
+    # ------------------------------------------------------------------ helpers
+
+    def _load_associated_data(self, db, user_ids: List[int], log_users) -> tuple:
+        """Загружает приложения, компьютеры и правила отделов для списка user_ids.
+        Возвращает (apps_by_user, computers_by_user, log_files_by_user, dept_allowed, dept_blocked).
+        """
+        apps_by_user: Dict[int, List[Dict]] = {}
+        for row in (
+            db.query(LogApp.user_id, LogApp.name, LogApp.first_launch, LogApp.launch_count, LogApp.last_seen)
+            .filter(LogApp.user_id.in_(user_ids))
+            .all()
+        ):
+            apps_by_user.setdefault(row[0], []).append({
+                'name': row[1],
+                'first_launch': row[2].strftime('%Y-%m-%d %H:%M:%S') if row[2] else None,
+                'launch_count': row[3],
+                'last_seen': row[4].strftime('%Y-%m-%d %H:%M:%S') if row[4] else None,
+            })
+
+        log_files_by_user: Dict[int, int] = {
+            row[0]: row[1]
+            for row in (
+                db.query(
+                    LogApp.user_id,
+                    func.count(func.distinct(func.cast(LogApp.first_launch, Date)))
+                )
+                .filter(LogApp.user_id.in_(user_ids), LogApp.first_launch.isnot(None))
+                .group_by(LogApp.user_id)
+                .all()
+            )
+        }
+
+        computers_by_user: Dict[int, List[str]] = {}
+        for uid, comp_name in (
+            db.query(LogUser.id, Computer.name)
+            .join(UserComputer, LogUser.id == UserComputer.user_id)
+            .join(Computer, Computer.id == UserComputer.computer_id)
+            .filter(LogUser.id.in_(user_ids))
+            .order_by(UserComputer.last_seen.desc())
+            .all()
+        ):
+            computers_by_user.setdefault(uid, []).append(comp_name)
+
+        dept_ids = list({u.department_id for u, _ in log_users if u.department_id})
+        dept_allowed: Dict[int, set] = {}
+        dept_blocked: Dict[int, set] = {}
+        if dept_ids:
+            for dept_id, app_name in (
+                db.query(DepartmentAllowedApp.department_id, DepartmentAllowedApp.app_name)
+                .filter(DepartmentAllowedApp.department_id.in_(dept_ids))
+                .all()
+            ):
+                dept_allowed.setdefault(dept_id, set()).add(app_name.lower())
+            for dept_id, app_name in (
+                db.query(DepartmentBlockedApp.department_id, DepartmentBlockedApp.app_name)
+                .filter(DepartmentBlockedApp.department_id.in_(dept_ids))
+                .all()
+            ):
+                dept_blocked.setdefault(dept_id, set()).add(app_name.lower())
+
+        return apps_by_user, computers_by_user, log_files_by_user, dept_allowed, dept_blocked
+
+    def _assemble_user_record(
+        self, log_user, dept,
+        apps_by_user, computers_by_user, log_files_by_user,
+        dept_allowed, dept_blocked,
+        today: str,
+    ) -> Dict:
+        """Собирает словарь пользователя из предзагруженных данных."""
+        user_id = log_user.id
+        department_id = log_user.department_id
+        allowed_set = dept_allowed.get(department_id, set())
+        blocked_set = dept_blocked.get(department_id, set())
+
+        apps_list = []
+        allowed_count = blocked_count = neutral_count = 0
+        for app in sorted(apps_by_user.get(user_id, []), key=lambda x: x['first_launch'] or ''):
+            status = self._get_app_status(app['name'].lower(), allowed_set, blocked_set)
+            if status == 'allowed':
+                allowed_count += 1
+            elif status == 'blocked':
+                blocked_count += 1
+            else:
+                neutral_count += 1
+            apps_list.append({
+                'name': app['name'],
+                'first_launch': app['first_launch'],
+                'last_seen': app['last_seen'],
+                'launch_count': app['launch_count'],
+                'status': status,
+            })
+
+        first_activity = log_user.first_seen.strftime('%H:%M:%S') if log_user.first_seen else None
+
+        computers = computers_by_user.get(user_id, [])
+        return {
+            'username': log_user.username,
+            'last_name': log_user.last_name,
+            'first_name': log_user.first_name,
+            'middle_name': log_user.middle_name,
+            'city': log_user.city,
+            'address': log_user.address,
+            'telegram': log_user.telegram,
+            'department_id': department_id,
+            'department': dept.name if dept else 'Не указан',
+            'computers': ', '.join(computers) if computers else 'Не указан',
+            'log_date': today,
+            'first_activity': first_activity,
+            'apps': apps_list,
+            'total_apps': len(apps_list),
+            'total_launches': sum(a['launch_count'] for a in apps_list),
+            'allowed_count': allowed_count,
+            'blocked_count': blocked_count,
+            'neutral_count': neutral_count,
+            'log_files_count': log_files_by_user.get(user_id, 1),
+        }
+
+    def _build_scope_filter(self, db, data_scope: dict):
+        """Строит SQLAlchemy-фильтр из data_scope. Возвращает None если ограничений нет."""
+        depts = data_scope.get('departments', [])
+        cities = data_scope.get('cities', [])
+        users_list = data_scope.get('users', [])
+        if not depts and not cities and not users_list:
+            return None
+        conditions = []
+        if depts:
+            dept_ids_sq = db.query(Department.id).filter(Department.name.in_(depts)).subquery()
+            conditions.append(LogUser.department_id.in_(dept_ids_sq))
+        if cities:
+            conditions.append(LogUser.city.in_(cities))
+        if users_list:
+            conditions.append(LogUser.username.in_(users_list))
+        return or_(*conditions)
+
+    # ------------------------------------------------------------------ public
+
     def get_all_users_data(self) -> List[Dict]:
-        """Получает данные по всем пользователям с учетом правил отделов.
-        Использует батч-запросы — O(1) запросов к БД вне зависимости от числа юзеров.
-        Результат кэшируется на _USERS_CACHE_TTL секунд.
+        """Загружает всех пользователей (батч-запросы, кэш 60 сек).
+        Используется отчётами и непагинированными запросами.
         """
         with self._cache_lock:
             if self._users_cache is not None and (time.monotonic() - self._users_cache_ts) < _USERS_CACHE_TTL:
                 logger.debug("get_all_users_data: возврат из кэша")
                 return self._users_cache
+
         db = SessionLocal()
         try:
-            # 1. Все пользователи с отделами
             log_users = (
                 db.query(LogUser, Department)
                 .outerjoin(Department, LogUser.department_id == Department.id)
@@ -269,133 +404,64 @@ class LogAnalyzer:
             )
             if not log_users:
                 return []
-
             user_ids = [u.id for u, _ in log_users]
-
-            # 2. Все приложения всех пользователей за один запрос
-            all_apps_rows = (
-                db.query(LogApp.user_id, LogApp.name, LogApp.first_launch, LogApp.launch_count, LogApp.last_seen)
-                .filter(LogApp.user_id.in_(user_ids))
-                .all()
-            )
-            apps_by_user: Dict[int, List[Dict]] = {}
-            for row in all_apps_rows:
-                apps_by_user.setdefault(row[0], []).append({
-                    'name': row[1], 'first_launch': row[2],
-                    'launch_count': row[3], 'last_seen': row[4],
-                })
-
-            # 3. Количество уникальных дат логов на пользователя
-            log_files_rows = (
-                db.query(
-                    LogApp.user_id,
-                    func.count(func.distinct(func.substring(LogApp.first_launch, 1, 10)))
-                )
-                .filter(LogApp.user_id.in_(user_ids), LogApp.first_launch != '')
-                .group_by(LogApp.user_id)
-                .all()
-            )
-            log_files_by_user: Dict[int, int] = {row[0]: row[1] for row in log_files_rows}
-
-            # 4. Все компьютеры всех пользователей
-            computers_rows = (
-                db.query(LogUser.id, Computer.name)
-                .join(UserComputer, LogUser.id == UserComputer.user_id)
-                .join(Computer, Computer.id == UserComputer.computer_id)
-                .filter(LogUser.id.in_(user_ids))
-                .order_by(UserComputer.last_seen.desc())
-                .all()
-            )
-            computers_by_user: Dict[int, List[str]] = {}
-            for uid, comp_name in computers_rows:
-                computers_by_user.setdefault(uid, []).append(comp_name)
-
-            # 5. Правила всех отделов (2 запроса на все отделы сразу)
-            dept_ids = list({u.department_id for u, _ in log_users if u.department_id})
-            dept_allowed: Dict[int, set] = {}
-            dept_blocked: Dict[int, set] = {}
-            if dept_ids:
-                for dept_id, app_name in (
-                    db.query(DepartmentAllowedApp.department_id, DepartmentAllowedApp.app_name)
-                    .filter(DepartmentAllowedApp.department_id.in_(dept_ids))
-                    .all()
-                ):
-                    dept_allowed.setdefault(dept_id, set()).add(app_name.lower())
-
-                for dept_id, app_name in (
-                    db.query(DepartmentBlockedApp.department_id, DepartmentBlockedApp.app_name)
-                    .filter(DepartmentBlockedApp.department_id.in_(dept_ids))
-                    .all()
-                ):
-                    dept_blocked.setdefault(dept_id, set()).add(app_name.lower())
-
+            assoc = self._load_associated_data(db, user_ids, log_users)
         finally:
             db.close()
 
-        # Собираем результат без обращений к БД
-        users_data = []
         today = datetime.now().strftime('%Y-%m-%d')
-
-        for log_user, dept in log_users:
-            user_id = log_user.id
-            department_id = log_user.department_id
-            allowed_set = dept_allowed.get(department_id, set())
-            blocked_set = dept_blocked.get(department_id, set())
-
-            apps = apps_by_user.get(user_id, [])
-            apps_list = []
-            allowed_count = blocked_count = neutral_count = 0
-
-            for app in sorted(apps, key=lambda x: x['first_launch'] or ''):
-                status = self._get_app_status(app['name'].lower(), allowed_set, blocked_set)
-                if status == 'allowed':
-                    allowed_count += 1
-                elif status == 'blocked':
-                    blocked_count += 1
-                else:
-                    neutral_count += 1
-                apps_list.append({
-                    'name': app['name'],
-                    'first_launch': app['first_launch'],
-                    'last_seen': app['last_seen'],
-                    'launch_count': app['launch_count'],
-                    'status': status,
-                })
-
-            first_activity = None
-            if log_user.first_seen:
-                ts = str(log_user.first_seen)
-                first_activity = ts.split()[1] if ' ' in ts else None
-
-            computers = computers_by_user.get(user_id, [])
-
-            users_data.append({
-                'username': log_user.username,
-                'last_name': log_user.last_name,
-                'first_name': log_user.first_name,
-                'middle_name': log_user.middle_name,
-                'city': log_user.city,
-                'address': log_user.address,
-                'telegram': log_user.telegram,
-                'department_id': department_id,
-                'department': dept.name if dept else 'Не указан',
-                'computers': ', '.join(computers) if computers else 'Не указан',
-                'log_date': today,
-                'first_activity': first_activity,
-                'apps': apps_list,
-                'total_apps': len(apps_list),
-                'total_launches': sum(a['launch_count'] for a in apps_list),
-                'allowed_count': allowed_count,
-                'blocked_count': blocked_count,
-                'neutral_count': neutral_count,
-                'log_files_count': log_files_by_user.get(user_id, 1),
-            })
-
+        users_data = [
+            self._assemble_user_record(lu, dept, *assoc, today)
+            for lu, dept in log_users
+        ]
         logger.debug("get_all_users_data: загружено %d пользователей", len(users_data))
         with self._cache_lock:
             self._users_cache = users_data
             self._users_cache_ts = time.monotonic()
         return users_data
+
+    def get_users_page(self, page: int, limit: int, data_scope: dict) -> Dict:
+        """Возвращает одну страницу пользователей с пагинацией на уровне БД.
+        Фильтр data_scope применяется в SQL (не в Python).
+        Возвращает {"items": [...], "total": int}.
+        """
+        db = SessionLocal()
+        try:
+            scope_filter = self._build_scope_filter(db, data_scope)
+
+            total: int = db.query(func.count(LogUser.id)).scalar() if scope_filter is None else (
+                db.query(func.count(LogUser.id)).filter(scope_filter).scalar()
+            )
+
+            page_q = (
+                db.query(LogUser, Department)
+                .outerjoin(Department, LogUser.department_id == Department.id)
+            )
+            if scope_filter is not None:
+                page_q = page_q.filter(scope_filter)
+
+            log_users = (
+                page_q
+                .order_by(LogUser.username)
+                .offset((page - 1) * limit)
+                .limit(limit)
+                .all()
+            )
+
+            if not log_users:
+                return {"items": [], "total": total}
+
+            user_ids = [u.id for u, _ in log_users]
+            assoc = self._load_associated_data(db, user_ids, log_users)
+        finally:
+            db.close()
+
+        today = datetime.now().strftime('%Y-%m-%d')
+        items = [
+            self._assemble_user_record(lu, dept, *assoc, today)
+            for lu, dept in log_users
+        ]
+        return {"items": items, "total": total}
 
     def _nslookup(self, hostname: str, timeout: int = 3) -> str:
         """Выполняет nslookup и возвращает первый IPv4-адрес или пустую строку."""

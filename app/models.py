@@ -157,9 +157,9 @@ class LogApp(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(500), nullable=False)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey('log_users.id', ondelete='CASCADE'), nullable=False)
-    first_launch: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    first_launch: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     launch_count: Mapped[int] = mapped_column(Integer, default=1)
-    last_seen: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_seen: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     user: Mapped['LogUser'] = relationship('LogUser', back_populates='apps')
 

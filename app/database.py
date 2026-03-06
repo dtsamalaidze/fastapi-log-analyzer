@@ -4,7 +4,7 @@ import hashlib
 import logging
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 
 from sqlalchemy import func, text
@@ -60,9 +60,9 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, stored: str) -> bool:
-    """Проверяет пароль против сохранённого хеша (или plain-text при миграции)"""
+    """Проверяет пароль против сохранённого PBKDF2-SHA256 хеша."""
     if not stored.startswith('pbkdf2:'):
-        return password == stored
+        return False
     try:
         _, salt, dk_hex = stored.split(':')
         dk = hashlib.pbkdf2_hmac('sha256', password.encode(), bytes.fromhex(salt), 200_000)
@@ -84,9 +84,6 @@ class UserDB:
     def authenticate(self, username: str, password: str) -> Optional[Dict]:
         user = self.db.query(User).filter(User.username == username).first()
         if user and verify_password(password, user.password):
-            if not user.password.startswith('pbkdf2:'):
-                user.password = hash_password(password)
-                self.db.flush()
             return {'username': user.username, 'name': user.name, 'role': user.role}
         return None
 
@@ -125,6 +122,22 @@ class SessionDB:
 
     def extend_session(self, token: str, expires_at: datetime) -> None:
         self.db.query(SessionModel).filter(SessionModel.token == token).update({'expires_at': expires_at})
+
+    def verify_and_refresh(self, token: str, session_max_age: int) -> Optional[str]:
+        """Проверяет токен и продлевает TTL если осталось < половины — всё в одной транзакции."""
+        sess = self.db.query(SessionModel).filter(SessionModel.token == token).first()
+        if not sess:
+            return None
+        now = datetime.now()
+        if now >= sess.expires_at:
+            self.db.delete(sess)
+            self.db.flush()
+            return None
+        remaining = (sess.expires_at - now).total_seconds()
+        if remaining < session_max_age / 2:
+            sess.expires_at = now + timedelta(seconds=session_max_age)
+            self.db.flush()
+        return sess.username
 
 
 class DepartmentDB:
@@ -245,6 +258,24 @@ class GlobalAppsDB:
             func.lower(GlobalBlockedApp.app_name) == func.lower(app_name)
         ).first() is not None
 
+    def set_allowed(self, app_name: str, added_by: str = None) -> bool:
+        """Атомарно: убирает из blocked (если был) и добавляет в allowed."""
+        self.db.query(GlobalBlockedApp).filter(GlobalBlockedApp.app_name == app_name).delete()
+        stmt = pg_insert(GlobalAllowedApp).values(app_name=app_name, added_by=added_by)
+        stmt = stmt.on_conflict_do_nothing(index_elements=['app_name'])
+        result = self.db.execute(stmt)
+        self.db.flush()
+        return result.rowcount > 0
+
+    def set_blocked(self, app_name: str, added_by: str = None) -> bool:
+        """Атомарно: убирает из allowed (если был) и добавляет в blocked."""
+        self.db.query(GlobalAllowedApp).filter(GlobalAllowedApp.app_name == app_name).delete()
+        stmt = pg_insert(GlobalBlockedApp).values(app_name=app_name, added_by=added_by)
+        stmt = stmt.on_conflict_do_nothing(index_elements=['app_name'])
+        result = self.db.execute(stmt)
+        self.db.flush()
+        return result.rowcount > 0
+
 
 class DepartmentAppsDB:
     """Работа со списками приложений по отделам"""
@@ -318,6 +349,34 @@ class DepartmentAppsDB:
         )
         return deleted > 0
 
+    def set_allowed(self, department_id: int, app_name: str, added_by: str = None) -> bool:
+        """Атомарно: убирает из blocked (если был) и добавляет в allowed."""
+        self.db.query(DepartmentBlockedApp).filter(
+            DepartmentBlockedApp.department_id == department_id,
+            DepartmentBlockedApp.app_name == app_name,
+        ).delete()
+        stmt = pg_insert(DepartmentAllowedApp).values(
+            department_id=department_id, app_name=app_name, added_by=added_by
+        )
+        stmt = stmt.on_conflict_do_nothing(index_elements=['department_id', 'app_name'])
+        result = self.db.execute(stmt)
+        self.db.flush()
+        return result.rowcount > 0
+
+    def set_blocked(self, department_id: int, app_name: str, added_by: str = None) -> bool:
+        """Атомарно: убирает из allowed (если был) и добавляет в blocked."""
+        self.db.query(DepartmentAllowedApp).filter(
+            DepartmentAllowedApp.department_id == department_id,
+            DepartmentAllowedApp.app_name == app_name,
+        ).delete()
+        stmt = pg_insert(DepartmentBlockedApp).values(
+            department_id=department_id, app_name=app_name, added_by=added_by
+        )
+        stmt = stmt.on_conflict_do_nothing(index_elements=['department_id', 'app_name'])
+        result = self.db.execute(stmt)
+        self.db.flush()
+        return result.rowcount > 0
+
 
 class LogUserDB:
     """Работа с пользователями из лог-файлов"""
@@ -328,11 +387,11 @@ class LogUserDB:
     def get_or_create(self, username: str) -> int:
         user = self.db.query(LogUser).filter(LogUser.username == username).first()
         if user:
-            user.last_seen = func.now()
+            user.last_seen = datetime.now()
             self.db.flush()
             return user.id
         else:
-            user = LogUser(username=username, first_seen=func.now(), last_seen=func.now())
+            user = LogUser(username=username, first_seen=datetime.now(), last_seen=datetime.now())
             self.db.add(user)
             self.db.flush()
             return user.id
@@ -487,6 +546,18 @@ class LogUserDB:
         ]
 
 
+def _parse_app_dt(s: str) -> Optional[datetime]:
+    """Parse a date/datetime string from log files into a datetime object."""
+    if not s:
+        return None
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            pass
+    return None
+
+
 class LogAppDB:
     """Работа с приложениями из лог-файлов"""
 
@@ -496,13 +567,14 @@ class LogAppDB:
     def add_or_update(self, user_id: int, app_name: str, first_launch: str,
                       launch_count: int = 1, log_date: str = ''):
         try:
-            last_seen_val = log_date if log_date else first_launch
+            first_launch_dt = _parse_app_dt(first_launch)
+            last_seen_dt = _parse_app_dt(log_date) or first_launch_dt
             stmt = pg_insert(LogApp).values(
                 user_id=user_id,
                 name=app_name,
-                first_launch=first_launch,
+                first_launch=first_launch_dt,
                 launch_count=launch_count,
-                last_seen=last_seen_val,
+                last_seen=last_seen_dt,
             )
             stmt = stmt.on_conflict_do_update(
                 index_elements=['name', 'user_id'],
@@ -526,9 +598,9 @@ class LogAppDB:
         return [
             {
                 'name': r[0],
-                'first_launch': r[1],
+                'first_launch': r[1].strftime('%Y-%m-%d %H:%M:%S') if r[1] else None,
                 'launch_count': r[2],
-                'last_seen': r[3],
+                'last_seen': r[3].strftime('%Y-%m-%d %H:%M:%S') if r[3] else None,
             }
             for r in rows
         ]
@@ -759,6 +831,18 @@ class AccountDB:
     def delete(self, username: str) -> bool:
         deleted = self.db.query(User).filter(User.username == username).delete()
         return deleted > 0
+
+    def update_password_and_invalidate_sessions(self, username: str, password: str) -> bool:
+        """Атомарно меняет пароль и инвалидирует все активные сессии пользователя."""
+        updated = (
+            self.db.query(User)
+            .filter(User.username == username)
+            .update({'password': hash_password(password)})
+        )
+        if updated:
+            self.db.query(SessionModel).filter(SessionModel.username == username).delete()
+            self.db.flush()
+        return updated > 0
 
     def count_admins(self) -> int:
         return self.db.query(func.count(User.id)).filter(User.role == 'admin').scalar()

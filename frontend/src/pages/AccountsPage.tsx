@@ -444,7 +444,7 @@ function CreateAccountModal({ open, onClose }: { open: boolean; onClose: () => v
         <div>
           <FieldLabel>Пароль</FieldLabel>
           <input type="password" className={inputCls} value={form.password}
-            onChange={e => setForm(p => ({ ...p, password: e.target.value }))} placeholder="Минимум 6 символов" />
+            onChange={e => setForm(p => ({ ...p, password: e.target.value }))} placeholder="Минимум 8 символов" />
         </div>
         <div>
           <FieldLabel>Системная роль</FieldLabel>
@@ -532,7 +532,7 @@ function ChangePasswordModal({ open, onClose, account }: { open: boolean; onClos
 
   function submit() {
     setErr('')
-    if (password.length < 6) { setErr('Пароль должен быть не менее 6 символов'); return }
+    if (password.length < 8) { setErr('Пароль должен быть не менее 8 символов'); return }
     if (password !== confirm) { setErr('Пароли не совпадают'); return }
     mutation.mutate()
   }
@@ -988,11 +988,11 @@ function AccountsTabWithCreate({ currentUser }: { currentUser: string }) {
       <CreateAccountModal open={activeModal === 'create'} onClose={() => setActiveModal(null)} />
       {selected && (
         <>
-          <EditAccountModal open={activeModal === 'edit'} onClose={() => setActiveModal(null)}
+          <EditAccountModal key={selected.username} open={activeModal === 'edit'} onClose={() => setActiveModal(null)}
             account={selected} currentUser={currentUser} />
-          <ChangePasswordModal open={activeModal === 'password'} onClose={() => setActiveModal(null)} account={selected} />
-          <PermissionsModal open={activeModal === 'permissions'} onClose={() => setActiveModal(null)} account={selected} />
-          <DeleteAccountModal open={activeModal === 'delete'} onClose={() => setActiveModal(null)} account={selected} />
+          <ChangePasswordModal key={selected.username} open={activeModal === 'password'} onClose={() => setActiveModal(null)} account={selected} />
+          <PermissionsModal key={selected.username} open={activeModal === 'permissions'} onClose={() => setActiveModal(null)} account={selected} />
+          <DeleteAccountModal key={selected.username} open={activeModal === 'delete'} onClose={() => setActiveModal(null)} account={selected} />
         </>
       )}
     </>

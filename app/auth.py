@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 # app/auth.py
+import logging
 import secrets
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
@@ -10,33 +11,47 @@ from app.database import (
 )
 from app.config import SESSION_MAX_AGE
 
+logger = logging.getLogger(__name__)
+
 
 class AuthManager:
     """Менеджер аутентификации"""
 
     def authenticate(self, username: str, password: str) -> Optional[str]:
-        """Аутентификация пользователя"""
-        user = user_db.authenticate(username, password)
-        if user:
+        """Аутентификация + создание сессии в одной транзакции."""
+        from app.db import SessionLocal
+        from app.database import UserDB, SessionDB
+        db = SessionLocal()
+        try:
+            user = UserDB(db).authenticate(username, password)
+            if not user:
+                db.commit()
+                return None
             token = secrets.token_hex(32)
             expires_at = datetime.now() + timedelta(seconds=SESSION_MAX_AGE)
-            session_db.create_session(token, username, expires_at)
+            SessionDB(db).create_session(token, username, expires_at)
+            db.commit()
             return token
-        return None
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
 
     def verify_session(self, token: str) -> Optional[str]:
-        """Проверяет валидность сессии. Продлевает TTL если осталось менее половины."""
-        session = session_db.get_session(token)
-        if session:
-            now = datetime.now()
-            if now < session['expires_at']:
-                remaining = (session['expires_at'] - now).total_seconds()
-                if remaining < SESSION_MAX_AGE / 2:
-                    session_db.extend_session(token, now + timedelta(seconds=SESSION_MAX_AGE))
-                return session['username']
-            else:
-                session_db.delete_session(token)
-        return None
+        """Проверяет валидность сессии и продлевает TTL — всё в одной транзакции."""
+        from app.db import SessionLocal
+        from app.database import SessionDB
+        db = SessionLocal()
+        try:
+            result = SessionDB(db).verify_and_refresh(token, SESSION_MAX_AGE)
+            db.commit()
+            return result
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
 
     def logout(self, token: str):
         """Завершает сессию"""
@@ -94,6 +109,14 @@ class GlobalAppsManager:
         if self.is_blocked(app_name):
             return 'blocked'
         return 'neutral'
+
+    def set_allowed_app(self, app_name: str, username: str = None) -> bool:
+        """Атомарно переводит приложение в глобально разрешённые."""
+        return global_apps_db.set_allowed(app_name, username)
+
+    def set_blocked_app(self, app_name: str, username: str = None) -> bool:
+        """Атомарно переводит приложение в глобально заблокированные."""
+        return global_apps_db.set_blocked(app_name, username)
 
 
 class DepartmentAppsManager:
@@ -155,6 +178,20 @@ class DepartmentAppsManager:
                 return 'blocked'
         return 'neutral'
 
+    def set_department_allowed(self, department_name: str, app_name: str, username: str = None) -> bool:
+        """Атомарно переводит приложение в разрешённые для отдела."""
+        dept_id = department_db.get_id_by_name(department_name)
+        if dept_id:
+            return department_apps_db.set_allowed(dept_id, app_name, username)
+        return False
+
+    def set_department_blocked(self, department_name: str, app_name: str, username: str = None) -> bool:
+        """Атомарно переводит приложение в заблокированные для отдела."""
+        dept_id = department_db.get_id_by_name(department_name)
+        if dept_id:
+            return department_apps_db.set_blocked(dept_id, app_name, username)
+        return False
+
 
 class DepartmentManager:
     """Менеджер отделов"""
@@ -190,4 +227,4 @@ global_apps_manager = GlobalAppsManager()
 department_apps_manager = DepartmentAppsManager()
 department_manager = DepartmentManager()
 
-print("✅ Auth module initialized")
+logger.info("Auth module initialized")
