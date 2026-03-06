@@ -6,7 +6,7 @@ interface BadgeProps {
 const statusConfig = {
   allowed: { cls: 'bg-emerald-100 text-emerald-700', label: 'Разрешено' },
   blocked: { cls: 'bg-red-100 text-red-700', label: 'Заблокировано' },
-  neutral: { cls: 'bg-gray-100 text-gray-600', label: 'Нейтрально' },
+  neutral: { cls: 'bg-gray-200 text-gray-700', label: 'Нейтрально' },
 }
 
 export default function Badge({ status, label }: BadgeProps) {
