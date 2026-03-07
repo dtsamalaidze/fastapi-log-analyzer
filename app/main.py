@@ -127,7 +127,6 @@ app.add_middleware(CSRFMiddleware)
 
 # Static directories
 config.STATIC_DIR.mkdir(exist_ok=True)
-config.DATA_FOLDER.mkdir(exist_ok=True)
 
 _spa_assets = config.STATIC_DIR / "dist" / "assets"
 try:
@@ -174,7 +173,6 @@ async def health_check():
         "global_blocked_count": len(global_apps_manager.get_blocked_apps()),
         "departments_count": len(department_manager.get_all_departments()),
         "static_exists": config.STATIC_DIR.exists(),
-        "data_folder_exists": config.DATA_FOLDER.exists(),
     }
 
 
