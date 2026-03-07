@@ -4,7 +4,7 @@ import re
 import os
 import glob
 import logging
-import subprocess
+import socket
 import threading
 import time
 from collections import OrderedDict, Counter
@@ -513,28 +513,16 @@ class LogAnalyzer:
         return {"items": items, "total": total}
 
     def _nslookup(self, hostname: str, timeout: int = 3) -> str:
-        """Выполняет nslookup и возвращает первый IPv4-адрес или пустую строку."""
+        """Резолвит hostname в IPv4-адрес через socket или пустую строку."""
         try:
-            result = subprocess.run(
-                ['nslookup', hostname],
-                capture_output=True, text=True, timeout=timeout
-            )
-            # Ищем строки "Address: x.x.x.x" после строки с именем хоста
-            # nslookup выводит: сначала адрес сервера, потом ответ
-            found_name = False
-            for line in result.stdout.splitlines():
-                if 'Name:' in line or 'name =' in line.lower():
-                    found_name = True
-                if found_name and 'Address:' in line:
-                    ip = line.split('Address:')[-1].strip().split()[0]
-                    if re.match(r'^\d{1,3}(\.\d{1,3}){3}$', ip):
-                        return ip
-            # Fallback: любой IPv4 в выводе (кроме строк "#53")
-            for line in result.stdout.splitlines():
-                if 'Address:' in line and '#' not in line:
-                    ip = line.split('Address:')[-1].strip().split()[0]
-                    if re.match(r'^\d{1,3}(\.\d{1,3}){3}$', ip):
-                        return ip
+            old_timeout = socket.getdefaulttimeout()
+            socket.setdefaulttimeout(timeout)
+            try:
+                ip = socket.gethostbyname(hostname)
+            finally:
+                socket.setdefaulttimeout(old_timeout)
+            if re.match(r'^\d{1,3}(\.\d{1,3}){3}$', ip):
+                return ip
         except Exception:
             pass
         return ''
