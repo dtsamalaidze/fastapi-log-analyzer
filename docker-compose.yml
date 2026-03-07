@@ -47,7 +47,6 @@ services:
       S3_SYNC_INTERVAL: "${S3_SYNC_INTERVAL:-3600}"
     volumes:
       - ./logs:/app/logs
-      - ./data:/app/data
     depends_on:
       postgres:
         condition: service_healthy

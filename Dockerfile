@@ -12,10 +12,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Исходный код
 COPY app/ ./app/
 COPY static/ ./static/
-COPY run.py .
 
-# Папки для данных и логов (перекрываются volumes)
-RUN mkdir -p logs data
+# Папка для логов (перекрывается volume)
+RUN mkdir -p logs
 
 EXPOSE 8001
 
