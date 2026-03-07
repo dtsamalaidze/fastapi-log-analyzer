@@ -7,8 +7,10 @@ from typing import Optional, Dict, List
 from fastapi import Request
 from app.database import (
     user_db, session_db, department_db, global_apps_db,
-    department_apps_db, log_user_db
+    department_apps_db, log_user_db,
+    DepartmentDB, DepartmentAppsDB,
 )
+from app.db import SessionLocal
 from app.config import SESSION_MAX_AGE
 
 logger = logging.getLogger(__name__)
@@ -19,7 +21,6 @@ class AuthManager:
 
     def authenticate(self, username: str, password: str) -> Optional[str]:
         """Аутентификация + создание сессии в одной транзакции."""
-        from app.db import SessionLocal
         from app.database import UserDB, SessionDB
         db = SessionLocal()
         try:
@@ -40,7 +41,6 @@ class AuthManager:
 
     def verify_session(self, token: str) -> Optional[str]:
         """Проверяет валидность сессии и продлевает TTL — всё в одной транзакции."""
-        from app.db import SessionLocal
         from app.database import SessionDB
         db = SessionLocal()
         try:
@@ -122,75 +122,81 @@ class GlobalAppsManager:
 class DepartmentAppsManager:
     """Менеджер списков приложений по отделам"""
 
+    def _call(self, fn):
+        """Открывает одну сессию, выполняет fn(dept_db, apps_db), коммитит."""
+        db = SessionLocal()
+        try:
+            result = fn(DepartmentDB(db), DepartmentAppsDB(db))
+            db.commit()
+            return result
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
     def get_departments(self) -> List[Dict]:
         """Получает список всех отделов с информацией"""
         return department_db.get_all()
 
     def get_department_allowed(self, department_name: str) -> List[str]:
-        """Получает разрешенные приложения для отдела"""
-        dept_id = department_db.get_id_by_name(department_name)
-        if dept_id:
-            return department_apps_db.get_allowed_by_department(dept_id)
-        return []
+        def fn(dept_db, apps_db):
+            dept_id = dept_db.get_id_by_name(department_name)
+            return apps_db.get_allowed_by_department(dept_id) if dept_id else []
+        return self._call(fn)
 
     def get_department_blocked(self, department_name: str) -> List[str]:
-        """Получает заблокированные приложения для отдела"""
-        dept_id = department_db.get_id_by_name(department_name)
-        if dept_id:
-            return department_apps_db.get_blocked_by_department(dept_id)
-        return []
+        def fn(dept_db, apps_db):
+            dept_id = dept_db.get_id_by_name(department_name)
+            return apps_db.get_blocked_by_department(dept_id) if dept_id else []
+        return self._call(fn)
 
     def add_department_allowed(self, department_name: str, app_name: str, username: str = None) -> bool:
-        """Добавляет разрешенное приложение для отдела"""
-        dept_id = department_db.get_id_by_name(department_name)
-        if dept_id:
-            return department_apps_db.add_allowed(dept_id, app_name, username)
-        return False
+        def fn(dept_db, apps_db):
+            dept_id = dept_db.get_id_by_name(department_name)
+            return apps_db.add_allowed(dept_id, app_name, username) if dept_id else False
+        return self._call(fn)
 
     def remove_department_allowed(self, department_name: str, app_name: str) -> bool:
-        """Удаляет разрешенное приложение для отдела"""
-        dept_id = department_db.get_id_by_name(department_name)
-        if dept_id:
-            return department_apps_db.remove_allowed(dept_id, app_name)
-        return False
+        def fn(dept_db, apps_db):
+            dept_id = dept_db.get_id_by_name(department_name)
+            return apps_db.remove_allowed(dept_id, app_name) if dept_id else False
+        return self._call(fn)
 
     def add_department_blocked(self, department_name: str, app_name: str, username: str = None) -> bool:
-        """Добавляет заблокированное приложение для отдела"""
-        dept_id = department_db.get_id_by_name(department_name)
-        if dept_id:
-            return department_apps_db.add_blocked(dept_id, app_name, username)
-        return False
+        def fn(dept_db, apps_db):
+            dept_id = dept_db.get_id_by_name(department_name)
+            return apps_db.add_blocked(dept_id, app_name, username) if dept_id else False
+        return self._call(fn)
 
     def remove_department_blocked(self, department_name: str, app_name: str) -> bool:
-        """Удаляет заблокированное приложение для отдела"""
-        dept_id = department_db.get_id_by_name(department_name)
-        if dept_id:
-            return department_apps_db.remove_blocked(dept_id, app_name)
-        return False
+        def fn(dept_db, apps_db):
+            dept_id = dept_db.get_id_by_name(department_name)
+            return apps_db.remove_blocked(dept_id, app_name) if dept_id else False
+        return self._call(fn)
 
     def get_department_app_status(self, department_name: str, app_name: str) -> str:
-        """Получает статус приложения для отдела"""
-        dept_id = department_db.get_id_by_name(department_name)
-        if dept_id:
-            if app_name in department_apps_db.get_allowed_by_department(dept_id):
-                return 'allowed'
-            if app_name in department_apps_db.get_blocked_by_department(dept_id):
-                return 'blocked'
-        return 'neutral'
+        def fn(dept_db, apps_db):
+            dept_id = dept_db.get_id_by_name(department_name)
+            if dept_id:
+                if app_name in apps_db.get_allowed_by_department(dept_id):
+                    return 'allowed'
+                if app_name in apps_db.get_blocked_by_department(dept_id):
+                    return 'blocked'
+            return 'neutral'
+        return self._call(fn)
 
     def set_department_allowed(self, department_name: str, app_name: str, username: str = None) -> bool:
-        """Атомарно переводит приложение в разрешённые для отдела."""
-        dept_id = department_db.get_id_by_name(department_name)
-        if dept_id:
-            return department_apps_db.set_allowed(dept_id, app_name, username)
-        return False
+        def fn(dept_db, apps_db):
+            dept_id = dept_db.get_id_by_name(department_name)
+            return apps_db.set_allowed(dept_id, app_name, username) if dept_id else False
+        return self._call(fn)
 
     def set_department_blocked(self, department_name: str, app_name: str, username: str = None) -> bool:
-        """Атомарно переводит приложение в заблокированные для отдела."""
-        dept_id = department_db.get_id_by_name(department_name)
-        if dept_id:
-            return department_apps_db.set_blocked(dept_id, app_name, username)
-        return False
+        def fn(dept_db, apps_db):
+            dept_id = dept_db.get_id_by_name(department_name)
+            return apps_db.set_blocked(dept_id, app_name, username) if dept_id else False
+        return self._call(fn)
 
 
 class DepartmentManager:

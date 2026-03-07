@@ -533,13 +533,14 @@ class LogAnalyzer:
 
     def get_global_stats(self, users_data: List[Dict]) -> Dict:
         """Получает глобальную статистику"""
+        total_log_files = len(self.find_all_log_files())
         if not users_data:
             return {
                 'total_users': 0,
                 'total_launches': 0,
                 'total_unique_apps': 0,
                 'avg_launches_per_user': 0,
-                'total_log_files': len(self.find_all_log_files()),
+                'total_log_files': total_log_files,
                 'avg_log_files_per_user': 0,
                 'total_computers': 0,
                 'top_apps': [],
@@ -552,7 +553,6 @@ class LogAnalyzer:
 
         total_users = len(users_data)
         total_launches = sum(user['total_launches'] for user in users_data)
-        total_log_files = len(self.find_all_log_files())
         total_unique_apps = set()
         all_computers = set()
 
@@ -573,19 +573,16 @@ class LogAnalyzer:
                     all_computers.add(comp)
 
         all_apps_counter = Counter()
+        users_per_app: Counter = Counter()
         for user in users_data:
             for app in user['apps']:
                 all_apps_counter[app['name']] += app['launch_count']
+                users_per_app[app['name']] += 1
 
-        top_apps = []
-        for app_name, count in all_apps_counter.most_common(10):
-            users_with_app = sum(1 for user in users_data
-                                 if any(a['name'] == app_name for a in user['apps']))
-            top_apps.append({
-                'name': app_name,
-                'count': count,
-                'users': users_with_app
-            })
+        top_apps = [
+            {'name': app_name, 'count': count, 'users': users_per_app[app_name]}
+            for app_name, count in all_apps_counter.most_common(10)
+        ]
 
         return {
             'total_users': total_users,
