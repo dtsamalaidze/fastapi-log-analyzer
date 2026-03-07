@@ -9,7 +9,7 @@ import Spinner from '../components/ui/Spinner'
 import Pagination from '../components/ui/Pagination'
 import { getPeriodDates } from '../utils/dates'
 
-type SortKey = 'username' | 'total_apps' | 'total_launches' | 'allowed_count' | 'blocked_count'
+type SortKey = 'username' | 'total_apps' | 'total_launches'
 
 function StatCard({ icon: Icon, label, value, colorCls }: { icon: React.ElementType; label: string; value: number; colorCls: string }) {
   return (
@@ -102,9 +102,13 @@ export default function UsersPage() {
     setPage(1)
   }, [debouncedSearch])
 
+  useEffect(() => {
+    setPage(1)
+  }, [sortKey, sortDir])
+
   const { data, isLoading } = useQuery({
-    queryKey: ['users', page, pageSize, debouncedSearch],
-    queryFn: () => api.getUsersPaged(page, pageSize, debouncedSearch),
+    queryKey: ['users', page, pageSize, debouncedSearch, sortKey, sortDir],
+    queryFn: () => api.getUsersPaged(page, pageSize, debouncedSearch, sortKey, sortDir),
     staleTime: 60_000,
   })
 
@@ -146,42 +150,28 @@ export default function UsersPage() {
 
   const { from: dateFrom, to: dateTo } = getPeriodDates(period, customFrom, customTo)
 
-  const processedUsers = users
-    .map(u => {
-      const filteredApps = filterApps(u.apps, dateFrom, dateTo, statusFilters)
-      return {
-        user: u,
-        filteredApps,
-        total_apps: filteredApps.length,
-        total_launches: filteredApps.reduce((s, a) => s + a.launch_count, 0),
-        allowed_count: filteredApps.filter(a => a.status === 'allowed').length,
-        blocked_count: filteredApps.filter(a => a.status === 'blocked').length,
-      }
-    })
-    .sort((a, b) => {
-      let av: string | number
-      let bv: string | number
-      if (sortKey === 'username') {
-        av = a.user.username
-        bv = b.user.username
-      } else if (sortKey === 'total_apps') {
-        av = a.total_apps
-        bv = b.total_apps
-      } else if (sortKey === 'total_launches') {
-        av = a.total_launches
-        bv = b.total_launches
-      } else if (sortKey === 'allowed_count') {
-        av = a.allowed_count
-        bv = b.allowed_count
-      } else {
-        av = a.blocked_count
-        bv = b.blocked_count
-      }
-      const cmp = typeof av === 'string' ? av.localeCompare(bv as string) : (av as number) - (bv as number)
-      return sortDir === 'asc' ? cmp : -cmp
-    })
+  const processedUsers = users.map(u => {
+    const filteredApps = filterApps(u.apps, dateFrom, dateTo, statusFilters)
+    return {
+      user: u,
+      filteredApps,
+      total_apps: filteredApps.length,
+      total_launches: filteredApps.reduce((s, a) => s + a.launch_count, 0),
+      allowed_count: filteredApps.filter(a => a.status === 'allowed').length,
+      blocked_count: filteredApps.filter(a => a.status === 'blocked').length,
+    }
+  })
 
-  const pagedUsers = processedUsers
+  const hasLocalFilters = period !== null || statusFilters.size > 0
+  const pagedUsers = hasLocalFilters
+    ? [...processedUsers].sort((a, b) => {
+        const mul = sortDir === 'desc' ? -1 : 1
+        if (sortKey === 'username') return mul * a.user.username.localeCompare(b.user.username)
+        if (sortKey === 'total_launches') return mul * (a.total_launches - b.total_launches)
+        if (sortKey === 'total_apps') return mul * (a.total_apps - b.total_apps)
+        return 0
+      })
+    : processedUsers
   const totalPages = Math.max(1, Math.ceil(serverTotal / pageSize))
 
   const hasFilters = period !== null || statusFilters.size > 0 || search.length > 0
@@ -307,11 +297,11 @@ export default function UsersPage() {
               <th className="px-4 py-3 text-right font-medium text-gray-600 dark:text-slate-300 cursor-pointer" onClick={() => handleSort('total_launches')}>
                 Запусков <SortIcon field="total_launches" current={sortKey} dir={sortDir} />
               </th>
-              <th className="px-4 py-3 text-right font-medium text-gray-600 dark:text-slate-300 cursor-pointer hidden lg:table-cell" onClick={() => handleSort('allowed_count')}>
-                Разреш. <SortIcon field="allowed_count" current={sortKey} dir={sortDir} />
+              <th className="px-4 py-3 text-right font-medium text-gray-600 dark:text-slate-300 hidden lg:table-cell">
+                Разреш.
               </th>
-              <th className="px-4 py-3 text-right font-medium text-gray-600 dark:text-slate-300 cursor-pointer hidden lg:table-cell" onClick={() => handleSort('blocked_count')}>
-                Заблок. <SortIcon field="blocked_count" current={sortKey} dir={sortDir} />
+              <th className="px-4 py-3 text-right font-medium text-gray-600 dark:text-slate-300 hidden lg:table-cell">
+                Заблок.
               </th>
             </tr>
           </thead>

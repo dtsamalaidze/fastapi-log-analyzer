@@ -36,8 +36,8 @@ export default function Pagination({
   }
 
   return (
-    <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 bg-gray-100">
-      <span className="text-sm text-gray-700">
+    <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-slate-700 bg-gray-100 dark:bg-slate-700/50">
+      <span className="text-sm text-gray-700 dark:text-slate-300">
         {total === 0 ? 'Нет записей' : `${from}–${to} из ${total}`}
       </span>
 
@@ -45,14 +45,14 @@ export default function Pagination({
         <button
           onClick={() => onPage(page - 1)}
           disabled={page === 1}
-          className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none transition-colors"
+          className="p-1.5 rounded-lg text-gray-400 dark:text-slate-500 hover:text-gray-700 dark:hover:text-slate-200 hover:bg-gray-200 dark:hover:bg-slate-600 disabled:opacity-30 disabled:pointer-events-none transition-colors"
         >
           <ChevronLeft className="w-4 h-4" />
         </button>
 
         {pages.map((p, i) =>
           p === '…' ? (
-            <span key={`dots-${i}`} className="px-2 text-gray-400 text-sm select-none">…</span>
+            <span key={`dots-${i}`} className="px-2 text-gray-400 dark:text-slate-500 text-sm select-none">…</span>
           ) : (
             <button
               key={p}
@@ -60,7 +60,7 @@ export default function Pagination({
               className={`min-w-[2rem] h-8 px-2 rounded-lg text-sm font-medium transition-colors ${
                 p === page
                   ? 'bg-indigo-600 text-white'
-                  : 'text-gray-600 hover:bg-gray-100'
+                  : 'text-gray-600 dark:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-600'
               }`}
             >
               {p}
@@ -71,7 +71,7 @@ export default function Pagination({
         <button
           onClick={() => onPage(page + 1)}
           disabled={page === totalPages}
-          className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 disabled:opacity-30 disabled:pointer-events-none transition-colors"
+          className="p-1.5 rounded-lg text-gray-400 dark:text-slate-500 hover:text-gray-700 dark:hover:text-slate-200 hover:bg-gray-200 dark:hover:bg-slate-600 disabled:opacity-30 disabled:pointer-events-none transition-colors"
         >
           <ChevronRight className="w-4 h-4" />
         </button>
@@ -81,7 +81,7 @@ export default function Pagination({
         <select
           value={pageSize}
           onChange={e => { onPageSize(Number(e.target.value)); onPage(1) }}
-          className="text-sm border border-gray-200 rounded-lg px-2 py-1 text-gray-600 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="text-sm border border-gray-200 dark:border-slate-600 rounded-lg px-2 py-1 text-gray-600 dark:text-slate-300 bg-white dark:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
         >
           {pageSizeOptions.map(s => (
             <option key={s} value={s}>{s} / стр.</option>

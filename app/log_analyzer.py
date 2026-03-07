@@ -34,18 +34,31 @@ class LogAnalyzer:
 
     def __init__(self, log_folder: str):
         self.log_folder = log_folder
-        self.global_allowed = []
-        self.global_blocked = []
+        self.global_allowed: set = set()
+        self.global_blocked: set = set()
         self._users_cache: Optional[List[Dict]] = None
         self._users_cache_ts: float = 0.0
+        self._files_count: Optional[int] = None
+        self._files_count_ts: float = 0.0
         self._cache_lock = threading.Lock()
 
     def refresh_global_lists(self):
         """Обновляет глобальные списки из БД"""
-        self.global_allowed = [app.lower() for app in global_apps_db.get_allowed_all()]
-        self.global_blocked = [app.lower() for app in global_apps_db.get_blocked_all()]
+        self.global_allowed = {app.lower() for app in global_apps_db.get_allowed_all()}
+        self.global_blocked = {app.lower() for app in global_apps_db.get_blocked_all()}
         logger.info("Глобальные списки обновлены: разрешено %d, заблокировано %d",
                     len(self.global_allowed), len(self.global_blocked))
+
+    def _get_total_files_count(self) -> int:
+        """Возвращает количество лог-файлов, кэшируя результат на 60 секунд."""
+        with self._cache_lock:
+            if self._files_count is not None and (time.monotonic() - self._files_count_ts) < _USERS_CACHE_TTL:
+                return self._files_count
+        count = len(self.find_all_log_files())
+        with self._cache_lock:
+            self._files_count = count
+            self._files_count_ts = time.monotonic()
+        return count
 
     def find_all_log_files(self) -> List[str]:
         """Находит все лог-файлы всех пользователей рекурсивно"""
@@ -217,6 +230,8 @@ class LogAnalyzer:
             settings_db.set_int(LAST_PROCESSED_MTIME_KEY, int(max_mtime))
             self.refresh_global_lists()
             self.invalidate_users_cache()
+            with self._cache_lock:
+                self._files_count = None
 
         logger.info("Обработано файлов: %d. new_last_mtime=%s", processed_count, max_mtime)
         return {
@@ -420,7 +435,8 @@ class LogAnalyzer:
             self._users_cache_ts = time.monotonic()
         return users_data
 
-    def get_users_page(self, page: int, limit: int, data_scope: dict, search: str = '') -> Dict:
+    def get_users_page(self, page: int, limit: int, data_scope: dict, search: str = '',
+                       sort_key: str = 'username', sort_dir: str = 'asc') -> Dict:
         """Возвращает одну страницу пользователей с пагинацией на уровне БД.
         Фильтры data_scope и search применяются в SQL (не в Python).
         Возвращает {"items": [...], "total": int}.
@@ -454,9 +470,28 @@ class LogAnalyzer:
 
             total: int = count_q.scalar()
 
+            stats_sq = (
+                db.query(
+                    LogApp.user_id.label('uid'),
+                    func.coalesce(func.sum(LogApp.launch_count), 0).label('total_launches'),
+                    func.count(LogApp.id).label('total_apps'),
+                )
+                .group_by(LogApp.user_id)
+                .subquery()
+            )
+            page_q = page_q.outerjoin(stats_sq, LogUser.id == stats_sq.c.uid)
+
+            _sort_cols = {
+                'username': LogUser.username,
+                'total_launches': func.coalesce(stats_sq.c.total_launches, 0),
+                'total_apps': func.coalesce(stats_sq.c.total_apps, 0),
+            }
+            sort_col = _sort_cols.get(sort_key, LogUser.username)
+            order_expr = sort_col.desc() if sort_dir == 'desc' else sort_col.asc()
+
             log_users = (
                 page_q
-                .order_by(LogUser.username)
+                .order_by(order_expr)
                 .offset((page - 1) * limit)
                 .limit(limit)
                 .all()
@@ -526,14 +561,14 @@ class LogAnalyzer:
         """Статус обработки логов: всего файлов, last_mtime."""
         last_mtime = settings_db.get_int(LAST_PROCESSED_MTIME_KEY) or 0
         return {
-            'total_files': len(self.find_all_log_files()),
+            'total_files': self._get_total_files_count(),
             'last_processed_mtime': last_mtime,
             'last_processed_iso': datetime.fromtimestamp(last_mtime).isoformat() if last_mtime else None
         }
 
     def get_global_stats(self, users_data: List[Dict]) -> Dict:
         """Получает глобальную статистику"""
-        total_log_files = len(self.find_all_log_files())
+        total_log_files = self._get_total_files_count()
         if not users_data:
             return {
                 'total_users': 0,

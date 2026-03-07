@@ -115,8 +115,8 @@ export default function DepartmentsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Распределение по отделам</h1>
-          <p className="text-sm text-gray-500 mt-0.5">{users.length} пользователей</p>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Распределение по отделам</h1>
+          <p className="text-sm text-gray-500 dark:text-slate-400 mt-0.5">{users.length} пользователей</p>
         </div>
         <Button size="sm" onClick={() => setShowAddDept(true)}>
           <Plus className="w-4 h-4" /> Новый отдел
@@ -149,7 +149,7 @@ export default function DepartmentsPage() {
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Поиск по имени, логину..."
-            className="w-full pl-9 pr-4 py-2.5 border border-gray-300 rounded-xl text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full pl-9 pr-4 py-2.5 border border-gray-300 dark:border-slate-600 rounded-xl text-sm bg-white dark:bg-slate-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
         </div>
         {cities.length > 0 && (
@@ -160,7 +160,7 @@ export default function DepartmentsPage() {
           className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border transition-colors ${
             hasTelegramOnly
               ? 'bg-blue-600 text-white border-blue-600'
-              : 'bg-white text-gray-600 border-gray-300 hover:border-blue-300 hover:text-blue-600'
+              : 'bg-white dark:bg-slate-700 text-gray-600 dark:text-slate-300 border-gray-300 dark:border-slate-600 hover:border-blue-300 hover:text-blue-600 dark:hover:border-blue-500 dark:hover:text-blue-400'
           }`}
         >
           Только с Telegram
@@ -168,7 +168,7 @@ export default function DepartmentsPage() {
         {hasLocalFilters && (
           <button
             onClick={() => { setCityFilter(new Set()); setHasTelegramOnly(false) }}
-            className="text-xs text-gray-400 hover:text-gray-600 underline"
+            className="text-xs text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 underline"
           >
             Сбросить
           </button>
@@ -176,18 +176,18 @@ export default function DepartmentsPage() {
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-gray-100 dark:border-slate-700 overflow-hidden">
         <table className="w-full text-sm">
           <thead>
-            <tr className="bg-gray-50 border-b border-gray-100">
-              <th className="px-4 py-3 text-left font-medium text-gray-600">Пользователь</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-600">Город</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-600">Telegram</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-600 hidden lg:table-cell">Компьютеры</th>
-              <th className="px-4 py-3 text-left font-medium text-gray-600">Отдел</th>
+            <tr className="bg-gray-50 dark:bg-slate-700/50 border-b border-gray-100 dark:border-slate-700">
+              <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-slate-300">Пользователь</th>
+              <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-slate-300">Город</th>
+              <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-slate-300">Telegram</th>
+              <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-slate-300 hidden lg:table-cell">Компьютеры</th>
+              <th className="px-4 py-3 text-left font-medium text-gray-600 dark:text-slate-300">Отдел</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-50">
+          <tbody className="divide-y divide-gray-50 dark:divide-slate-700">
             {filtered.map(user => (
               <UserRow
                 key={user.username}
@@ -201,15 +201,15 @@ export default function DepartmentsPage() {
             {filtered.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-4 py-12 text-center">
-                  <Users className="w-8 h-8 text-gray-200 mx-auto mb-2" />
-                  <p className="text-gray-400 text-sm">Пользователи не найдены</p>
+                  <Users className="w-8 h-8 text-gray-200 dark:text-slate-600 mx-auto mb-2" />
+                  <p className="text-gray-400 dark:text-slate-500 text-sm">Пользователи не найдены</p>
                 </td>
               </tr>
             )}
           </tbody>
         </table>
         {filtered.length > 0 && (
-          <div className="px-4 py-2 border-t border-gray-50 text-xs text-gray-400 text-right">
+          <div className="px-4 py-2 border-t border-gray-50 dark:border-slate-700 text-xs text-gray-400 dark:text-slate-500 text-right">
             {filtered.length} из {users.length}
           </div>
         )}
@@ -239,7 +239,7 @@ export default function DepartmentsPage() {
             onKeyDown={e => e.key === 'Enter' && newDeptName.trim() && addDeptMutation.mutate()}
             placeholder="Название отдела"
             autoFocus
-            className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full px-3 py-2.5 border border-gray-300 dark:border-slate-600 rounded-lg text-sm bg-white dark:bg-slate-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setShowAddDept(false)}>Отмена</Button>
@@ -264,18 +264,18 @@ function FilterChip({ label, count, active, warn = false, onClick, onDelete }: {
       onClick={onClick}
       className={`inline-flex items-center gap-1.5 pl-3 rounded-full border text-sm font-medium cursor-pointer select-none transition-colors
         ${active ? 'bg-indigo-600 border-indigo-600 text-white'
-          : warn && count > 0 ? 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100'
-          : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}
+          : warn && count > 0 ? 'bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-700 text-amber-700 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/50'
+          : 'bg-white dark:bg-slate-800 border-gray-200 dark:border-slate-600 text-gray-600 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-700'}
         ${onDelete ? 'pr-1' : 'pr-3'}`}
     >
       <span>{label}</span>
-      <span className={`text-xs px-1.5 py-0.5 rounded-full ${active ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-500'}`}>
+      <span className={`text-xs px-1.5 py-0.5 rounded-full ${active ? 'bg-white/20 text-white' : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400'}`}>
         {count}
       </span>
       {onDelete && (
         <button
           onClick={e => { e.stopPropagation(); onDelete() }}
-          className={`p-1 rounded-full transition-colors ${active ? 'hover:bg-white/20' : 'hover:bg-red-100 hover:text-red-600'}`}
+          className={`p-1 rounded-full transition-colors ${active ? 'hover:bg-white/20' : 'hover:bg-red-100 dark:hover:bg-red-900/30 hover:text-red-600 dark:hover:text-red-400'}`}
         >
           <Trash2 className="w-3 h-3" />
         </button>
@@ -302,15 +302,15 @@ function UserRow({ user, deptNames, selected, onClick, onChange }: {
   }
 
   return (
-    <tr onClick={onClick} className={`cursor-pointer transition-colors ${selected ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}>
+    <tr onClick={onClick} className={`cursor-pointer transition-colors ${selected ? 'bg-indigo-50 dark:bg-indigo-900/20' : 'hover:bg-gray-50 dark:hover:bg-slate-700/50'}`}>
       <td className="px-4 py-3">
-        <p className="font-medium text-gray-900">{fio ?? user.username}</p>
-        {fio && <p className="text-xs text-gray-400 mt-0.5">{user.username}</p>}
+        <p className="font-medium text-gray-900 dark:text-white">{fio ?? user.username}</p>
+        {fio && <p className="text-xs text-gray-400 dark:text-slate-500 mt-0.5">{user.username}</p>}
       </td>
       <td className="px-4 py-3">
         {user.city
-          ? <span className="flex items-center gap-1 text-sm text-gray-600 whitespace-nowrap"><MapPin className="w-3.5 h-3.5 text-gray-400 shrink-0" />{user.city}</span>
-          : <span className="text-gray-300">—</span>}
+          ? <span className="flex items-center gap-1 text-sm text-gray-600 dark:text-slate-300 whitespace-nowrap"><MapPin className="w-3.5 h-3.5 text-gray-400 dark:text-slate-500 shrink-0" />{user.city}</span>
+          : <span className="text-gray-300 dark:text-slate-600">—</span>}
       </td>
       <td className="px-4 py-3">
         {user.telegram ? (
@@ -319,22 +319,22 @@ function UserRow({ user, deptNames, selected, onClick, onChange }: {
             title="Копировать в буфер"
             className={`flex items-center gap-1.5 text-xs font-mono rounded px-2 py-0.5 transition-colors whitespace-nowrap ${
               copied
-                ? 'bg-emerald-50 text-emerald-600'
-                : 'bg-blue-50 text-blue-700 hover:bg-blue-100'
+                ? 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400'
+                : 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/50'
             }`}
           >
             {copied ? <Check className="w-3 h-3 shrink-0" /> : <Copy className="w-3 h-3 shrink-0" />}
             {user.telegram}
           </button>
-        ) : <span className="text-gray-300">—</span>}
+        ) : <span className="text-gray-300 dark:text-slate-600">—</span>}
       </td>
-      <td className="px-4 py-3 text-gray-400 text-xs hidden lg:table-cell">{user.computers || '—'}</td>
+      <td className="px-4 py-3 text-gray-400 dark:text-slate-500 text-xs hidden lg:table-cell">{user.computers || '—'}</td>
       <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
         <select
           value={user.department ?? ''}
           onChange={e => onChange(e.target.value || null)}
-          className={`text-sm border rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white cursor-pointer transition-colors
-            ${user.department ? 'border-indigo-200 text-indigo-700 bg-indigo-50' : 'border-gray-300 text-gray-400'}`}
+          className={`text-sm border rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer transition-colors
+            ${user.department ? 'border-indigo-200 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/20' : 'border-gray-300 dark:border-slate-600 text-gray-400 dark:text-slate-400 bg-white dark:bg-slate-700'}`}
         >
           <option value="">Без отдела</option>
           {deptNames.map(d => <option key={d} value={d}>{d}</option>)}
@@ -391,63 +391,63 @@ function UserPanel({ user, deptNames, onClose, onDeptChange, onSaved }: {
   return (
     <>
       <div className="fixed inset-0 bg-black/20 z-40" onClick={onClose} />
-      <div className="fixed right-0 top-0 h-full w-full sm:w-[420px] bg-white shadow-2xl z-50 flex flex-col overflow-y-auto">
+      <div className="fixed right-0 top-0 h-full w-full sm:w-[420px] bg-white dark:bg-slate-900 shadow-2xl z-50 flex flex-col overflow-y-auto">
 
         {/* Header */}
-        <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100 flex-shrink-0">
+        <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100 dark:border-slate-700 flex-shrink-0">
           <div>
-            <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">Пользователь</p>
-            <h2 className="font-bold text-xl text-gray-900">{fio ?? user.username}</h2>
-            {fio && <p className="text-xs text-gray-400 mt-0.5">{user.username}</p>}
+            <p className="text-xs text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-1">Пользователь</p>
+            <h2 className="font-bold text-xl text-gray-900 dark:text-white">{fio ?? user.username}</h2>
+            {fio && <p className="text-xs text-gray-400 dark:text-slate-500 mt-0.5">{user.username}</p>}
             {user.department && (
-              <span className="inline-block mt-1.5 px-2 py-0.5 bg-indigo-100 text-indigo-700 text-xs rounded-full font-medium">
+              <span className="inline-block mt-1.5 px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 text-xs rounded-full font-medium">
                 {user.department}
               </span>
             )}
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 transition-colors mt-0.5">
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800 text-gray-400 dark:text-slate-500 transition-colors mt-0.5">
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Stats */}
-        <div className="px-6 py-4 border-b border-gray-100">
-          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-3">
+        <div className="px-6 py-4 border-b border-gray-100 dark:border-slate-700">
+          <p className="text-xs font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wide mb-3">
             Приложения · {total} всего
           </p>
           <div className="grid grid-cols-3 gap-3">
-            <div className="flex flex-col items-center p-3 bg-emerald-50 rounded-xl">
+            <div className="flex flex-col items-center p-3 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl">
               <CheckCircle className="w-5 h-5 text-emerald-500 mb-1" />
-              <span className="text-2xl font-bold text-emerald-600">{user.allowed_count}</span>
-              <span className="text-xs text-emerald-600 mt-0.5">Разрешено</span>
+              <span className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{user.allowed_count}</span>
+              <span className="text-xs text-emerald-600 dark:text-emerald-400 mt-0.5">Разрешено</span>
             </div>
-            <div className="flex flex-col items-center p-3 bg-red-50 rounded-xl">
+            <div className="flex flex-col items-center p-3 bg-red-50 dark:bg-red-900/20 rounded-xl">
               <XCircle className="w-5 h-5 text-red-400 mb-1" />
-              <span className="text-2xl font-bold text-red-600">{user.blocked_count}</span>
-              <span className="text-xs text-red-600 mt-0.5">Заблокировано</span>
+              <span className="text-2xl font-bold text-red-600 dark:text-red-400">{user.blocked_count}</span>
+              <span className="text-xs text-red-600 dark:text-red-400 mt-0.5">Заблокировано</span>
             </div>
-            <div className="flex flex-col items-center p-3 bg-gray-50 rounded-xl">
-              <Circle className="w-5 h-5 text-gray-400 mb-1" />
-              <span className="text-2xl font-bold text-gray-600">{user.neutral_count}</span>
-              <span className="text-xs text-gray-500 mt-0.5">Нейтрально</span>
+            <div className="flex flex-col items-center p-3 bg-gray-50 dark:bg-slate-800 rounded-xl">
+              <Circle className="w-5 h-5 text-gray-400 dark:text-slate-500 mb-1" />
+              <span className="text-2xl font-bold text-gray-600 dark:text-slate-300">{user.neutral_count}</span>
+              <span className="text-xs text-gray-500 dark:text-slate-400 mt-0.5">Нейтрально</span>
             </div>
           </div>
           {total > 0 && (
-            <div className="mt-3 h-1.5 rounded-full bg-gray-100 overflow-hidden flex">
+            <div className="mt-3 h-1.5 rounded-full bg-gray-100 dark:bg-slate-700 overflow-hidden flex">
               {user.allowed_count > 0 && <div className="bg-emerald-400 h-full" style={{ width: `${(user.allowed_count / total) * 100}%` }} />}
               {user.blocked_count > 0 && <div className="bg-red-400 h-full" style={{ width: `${(user.blocked_count / total) * 100}%` }} />}
-              {user.neutral_count > 0 && <div className="bg-gray-300 h-full" style={{ width: `${(user.neutral_count / total) * 100}%` }} />}
+              {user.neutral_count > 0 && <div className="bg-gray-300 dark:bg-slate-500 h-full" style={{ width: `${(user.neutral_count / total) * 100}%` }} />}
             </div>
           )}
         </div>
 
         {/* Computers */}
         {user.computers && user.computers !== 'Не указан' && (
-          <div className="px-6 py-4 border-b border-gray-100">
-            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Компьютеры</p>
+          <div className="px-6 py-4 border-b border-gray-100 dark:border-slate-700">
+            <p className="text-xs font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wide mb-2">Компьютеры</p>
             <div className="flex flex-wrap gap-1.5">
               {user.computers.split(', ').map(c => (
-                <span key={c} className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 text-gray-600 text-xs rounded-lg">
+                <span key={c} className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300 text-xs rounded-lg">
                   <Monitor className="w-3 h-3" />{c}
                 </span>
               ))}
@@ -456,12 +456,12 @@ function UserPanel({ user, deptNames, onClose, onDeptChange, onSaved }: {
         )}
 
         {/* Department */}
-        <div className="px-6 py-4 border-b border-gray-100">
-          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Отдел</p>
+        <div className="px-6 py-4 border-b border-gray-100 dark:border-slate-700">
+          <p className="text-xs font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wide mb-2">Отдел</p>
           <select
             value={user.department ?? ''}
             onChange={e => onDeptChange(e.target.value || null)}
-            className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+            className="w-full text-sm border border-gray-300 dark:border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-slate-700 text-gray-900 dark:text-white"
           >
             <option value="">Без отдела</option>
             {deptNames.map(d => <option key={d} value={d}>{d}</option>)}
@@ -472,7 +472,7 @@ function UserPanel({ user, deptNames, onClose, onDeptChange, onSaved }: {
         <div className="px-6 py-5 flex-1 space-y-5">
           {/* ФИО */}
           <div>
-            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-3">ФИО</p>
+            <p className="text-xs font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wide mb-3">ФИО</p>
             <div className="space-y-2.5">
               <LabeledInput label="Фамилия" value={lastName} onChange={setLastName} placeholder="Иванов" />
               <LabeledInput label="Имя" value={firstName} onChange={setFirstName} placeholder="Иван" />
@@ -482,7 +482,7 @@ function UserPanel({ user, deptNames, onClose, onDeptChange, onSaved }: {
 
           {/* Контакты */}
           <div>
-            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-3">Контакты</p>
+            <p className="text-xs font-medium text-gray-500 dark:text-slate-400 uppercase tracking-wide mb-3">Контакты</p>
             <div className="space-y-2.5">
               <LabeledInput
                 label="Город" value={city} onChange={setCity} placeholder="Москва"
@@ -520,14 +520,14 @@ function LabeledInput({ label, value, onChange, placeholder, icon }: {
 }) {
   return (
     <div>
-      <label className="block text-xs text-gray-500 mb-1">{label}</label>
+      <label className="block text-xs text-gray-500 dark:text-slate-400 mb-1">{label}</label>
       <div className="relative">
         {icon && <span className="absolute left-3 top-1/2 -translate-y-1/2">{icon}</span>}
         <input
           value={value}
           onChange={e => onChange(e.target.value)}
           placeholder={placeholder}
-          className={`w-full border border-gray-300 rounded-lg text-sm py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${icon ? 'pl-9 pr-3' : 'px-3'}`}
+          className={`w-full border border-gray-300 dark:border-slate-600 rounded-lg text-sm py-2.5 bg-white dark:bg-slate-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${icon ? 'pl-9 pr-3' : 'px-3'}`}
         />
       </div>
     </div>

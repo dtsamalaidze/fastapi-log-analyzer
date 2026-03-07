@@ -232,6 +232,11 @@ async def clear_logs_db(request: Request):
             return deleted
 
         deleted = await asyncio.get_running_loop().run_in_executor(None, run_clear)
+        from app.state import analyzer, report_cache
+        report_cache.invalidate()
+        analyzer.invalidate_users_cache()
+        with analyzer._cache_lock:
+            analyzer._files_count = None
         return JSONResponse({"success": True, "deleted": deleted})
     except HTTPException:
         raise

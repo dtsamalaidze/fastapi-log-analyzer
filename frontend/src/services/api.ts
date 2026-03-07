@@ -41,9 +41,11 @@ export const api = {
 
   // Users & stats
   getUsers: () => request<UserData[]>('/api/users'),
-  getUsersPaged: (page: number, limit: number, search?: string) => {
+  getUsersPaged: (page: number, limit: number, search?: string, sortKey?: string, sortDir?: string) => {
     const params = new URLSearchParams({ page: String(page), limit: String(limit) })
     if (search) params.set('search', search)
+    if (sortKey) params.set('sort_key', sortKey)
+    if (sortDir) params.set('sort_dir', sortDir)
     return request<{ items: UserData[]; total: number; page: number; limit: number }>(`/api/users?${params}`)
   },
   getStats: () => request<Stats>('/api/stats'),

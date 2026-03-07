@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from app.deps import require_auth, apply_data_scope, get_user_data_scope
-from app.state import analyzer
+from app.state import analyzer, report_cache
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -19,13 +19,20 @@ async def get_users(
     page: Optional[int] = Query(None, ge=1),
     limit: Optional[int] = Query(None, ge=1, le=500),
     search: Optional[str] = Query(None),
+    sort_key: Optional[str] = Query(None),
+    sort_dir: Optional[str] = Query(None),
 ):
-    """Users list with optional DB-level pagination and search: ?page=1&limit=50&search=ivan."""
+    """Users list with optional DB-level pagination, search and sort: ?page=1&limit=50&search=ivan&sort_key=total_launches&sort_dir=desc."""
     try:
         require_auth(request)
         if page is not None and limit is not None:
             scope = get_user_data_scope(request)
-            result = analyzer.get_users_page(page, limit, scope, search=search or '')
+            result = analyzer.get_users_page(
+                page, limit, scope,
+                search=search or '',
+                sort_key=sort_key or 'username',
+                sort_dir=sort_dir or 'asc',
+            )
             return JSONResponse(content={"items": result["items"], "total": result["total"], "page": page, "limit": limit})
         users_data = analyzer.get_all_users_data()
         users_data = apply_data_scope(users_data, get_user_data_scope(request))
@@ -96,6 +103,9 @@ async def set_user_profile(username: str, request: Request):
             data.get('address', '') or '',
             data.get('telegram', '') or '',
         )
+        if success:
+            report_cache.invalidate()
+            analyzer.invalidate_users_cache()
         return JSONResponse({"success": success})
     except HTTPException:
         raise

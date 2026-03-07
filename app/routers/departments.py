@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from app.auth import department_apps_manager, department_manager
 from app.deps import require_auth, require_admin
+from app.state import analyzer, report_cache
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -76,6 +77,9 @@ async def set_user_department(request: Request):
         if not username:
             return JSONResponse(status_code=400, content={"error": "Не указан пользователь"})
         success = department_manager.set_user_department(username, department)
+        if success:
+            report_cache.invalidate()
+            analyzer.invalidate_users_cache()
         return JSONResponse({
             "success": success,
             "message": f"Отдел пользователя {username} изменен на {department}" if success else "Ошибка при изменении отдела",
@@ -114,6 +118,9 @@ async def add_department_allowed(department_name: str, request: Request):
         if not app_name:
             return JSONResponse(status_code=400, content={"error": "Не указано имя приложения"})
         success = department_apps_manager.set_department_allowed(department_name, app_name, user['username'])
+        if success:
+            report_cache.invalidate()
+            analyzer.invalidate_users_cache()
         return JSONResponse({
             "success": success,
             "message": f"Приложение добавлено в разрешенные для отдела {department_name}" if success else "Приложение уже в списке",
@@ -134,6 +141,9 @@ async def remove_department_allowed(department_name: str, request: Request):
         if not app_name:
             return JSONResponse(status_code=400, content={"error": "Не указано имя приложения"})
         success = department_apps_manager.remove_department_allowed(department_name, app_name)
+        if success:
+            report_cache.invalidate()
+            analyzer.invalidate_users_cache()
         return JSONResponse({
             "success": success,
             "message": f"Приложение удалено из разрешенных для отдела {department_name}" if success else "Приложение не найдено",
@@ -154,6 +164,9 @@ async def add_department_blocked(department_name: str, request: Request):
         if not app_name:
             return JSONResponse(status_code=400, content={"error": "Не указано имя приложения"})
         success = department_apps_manager.set_department_blocked(department_name, app_name, user['username'])
+        if success:
+            report_cache.invalidate()
+            analyzer.invalidate_users_cache()
         return JSONResponse({
             "success": success,
             "message": f"Приложение добавлено в заблокированные для отдела {department_name}" if success else "Приложение уже в списке",
@@ -174,6 +187,9 @@ async def remove_department_blocked(department_name: str, request: Request):
         if not app_name:
             return JSONResponse(status_code=400, content={"error": "Не указано имя приложения"})
         success = department_apps_manager.remove_department_blocked(department_name, app_name)
+        if success:
+            report_cache.invalidate()
+            analyzer.invalidate_users_cache()
         return JSONResponse({
             "success": success,
             "message": f"Приложение удалено из заблокированных для отдела {department_name}" if success else "Приложение не найдено",

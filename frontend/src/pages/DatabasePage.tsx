@@ -102,6 +102,12 @@ export default function DatabasePage() {
       }
       qc.invalidateQueries({ queryKey: ['logs-status'] })
       qc.invalidateQueries({ queryKey: ['db-stats'] })
+      qc.invalidateQueries({ queryKey: ['users'] })
+      qc.invalidateQueries({ queryKey: ['stats'] })
+      qc.invalidateQueries({ queryKey: ['reports/users'] })
+      qc.invalidateQueries({ queryKey: ['reports/apps'] })
+      qc.invalidateQueries({ queryKey: ['reports/computers'] })
+      qc.invalidateQueries({ queryKey: ['reports/departments'] })
       showToast('Логи успешно обработаны', 'success')
     },
     onError: (e: Error) => {
@@ -116,6 +122,12 @@ export default function DatabasePage() {
       setClearModal(null)
       setClearConfirmText('')
       qc.invalidateQueries({ queryKey: ['db-stats'] })
+      qc.invalidateQueries({ queryKey: ['users'] })
+      qc.invalidateQueries({ queryKey: ['stats'] })
+      qc.invalidateQueries({ queryKey: ['reports/users'] })
+      qc.invalidateQueries({ queryKey: ['reports/apps'] })
+      qc.invalidateQueries({ queryKey: ['reports/computers'] })
+      qc.invalidateQueries({ queryKey: ['reports/departments'] })
       const total = Object.values(res.deleted).reduce((a, b) => a + b, 0)
       showToast(`Удалено ${total} записей`, 'success')
     },
@@ -136,8 +148,8 @@ export default function DatabasePage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">База данных</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">База данных</h1>
+          <p className="text-sm text-gray-500 dark:text-slate-400 mt-0.5">
             Обслуживание и мониторинг PostgreSQL
           </p>
         </div>
@@ -148,11 +160,11 @@ export default function DatabasePage() {
 
       {/* ── Engine badge ── */}
       {stats && (
-        <div className="flex items-center gap-3 px-4 py-3 bg-indigo-50 border border-indigo-100 rounded-xl text-sm">
+        <div className="flex items-center gap-3 px-4 py-3 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-800 rounded-xl text-sm">
           <Database className="w-5 h-5 text-indigo-500 shrink-0" />
           <div>
-            <span className="font-semibold text-indigo-800">Движок: </span>
-            <span className="font-mono text-indigo-700">{stats.engine}</span>
+            <span className="font-semibold text-indigo-800 dark:text-indigo-300">Движок: </span>
+            <span className="font-mono text-indigo-700 dark:text-indigo-400">{stats.engine}</span>
           </div>
         </div>
       )}
@@ -333,29 +345,29 @@ export default function DatabasePage() {
 
       {/* ── Table stats ── */}
       {stats && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-          <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
-            <Table2 className="w-4 h-4 text-gray-400" />
-            <span className="font-semibold text-gray-800 text-sm">Статистика таблиц</span>
+        <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-gray-100 dark:border-slate-700 overflow-hidden">
+          <div className="px-5 py-3 border-b border-gray-100 dark:border-slate-700 flex items-center gap-2">
+            <Table2 className="w-4 h-4 text-gray-400 dark:text-slate-500" />
+            <span className="font-semibold text-gray-800 dark:text-white text-sm">Статистика таблиц</span>
           </div>
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-gray-50 border-b border-gray-100">
-                <th className="px-5 py-2.5 text-left text-xs font-medium text-gray-500">Таблица</th>
-                <th className="px-5 py-2.5 text-right text-xs font-medium text-gray-500">Записей</th>
-                <th className="px-5 py-2.5 text-right text-xs font-medium text-gray-500"></th>
+              <tr className="bg-gray-50 dark:bg-slate-700/50 border-b border-gray-100 dark:border-slate-700">
+                <th className="px-5 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-slate-400">Таблица</th>
+                <th className="px-5 py-2.5 text-right text-xs font-medium text-gray-500 dark:text-slate-400">Записей</th>
+                <th className="px-5 py-2.5 text-right text-xs font-medium text-gray-500 dark:text-slate-400"></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-50">
+            <tbody className="divide-y divide-gray-50 dark:divide-slate-700">
               {Object.entries(stats.tables).map(([table, count]) => {
                 const isLog = LOG_TABLES.includes(table)
                 return (
-                  <tr key={table} className="hover:bg-gray-50">
+                  <tr key={table} className="hover:bg-gray-50 dark:hover:bg-slate-700/50">
                     <td className="px-5 py-2.5">
-                      <span className="font-mono text-xs text-gray-500 mr-2">{table}</span>
-                      <span className="text-gray-700">{TABLE_LABELS[table] ?? ''}</span>
+                      <span className="font-mono text-xs text-gray-500 dark:text-slate-400 mr-2">{table}</span>
+                      <span className="text-gray-700 dark:text-slate-300">{TABLE_LABELS[table] ?? ''}</span>
                     </td>
-                    <td className="px-5 py-2.5 text-right font-medium text-gray-800">
+                    <td className="px-5 py-2.5 text-right font-medium text-gray-800 dark:text-white">
                       {count < 0 ? '—' : count.toLocaleString('ru-RU')}
                     </td>
                     <td className="px-5 py-2.5 text-right">
@@ -401,7 +413,7 @@ export default function DatabasePage() {
               value={clearConfirmText}
               onChange={e => setClearConfirmText(e.target.value)}
               placeholder="УДАЛИТЬ"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+              className="w-full border border-gray-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-slate-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-red-500"
             />
           </div>
           <div className="flex justify-end gap-2">
@@ -435,7 +447,7 @@ export default function DatabasePage() {
               min={1}
               value={olderThanDays}
               onChange={e => setOlderThanDays(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full border border-gray-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-slate-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
           <div className="flex items-center gap-2 p-3 bg-amber-50 rounded-lg text-sm text-amber-700">
@@ -465,10 +477,10 @@ function StatCard({ icon, label, value, sub, warn = false }: {
   icon: React.ReactNode; label: string; value: string; sub?: string; warn?: boolean
 }) {
   return (
-    <div className={`bg-white rounded-xl shadow-sm border p-4 ${warn ? 'border-amber-200' : 'border-gray-100'}`}>
-      <div className="flex items-center gap-2 mb-2">{icon}<span className="text-xs text-gray-500 font-medium">{label}</span></div>
-      <p className={`text-xl font-bold ${warn ? 'text-amber-600' : 'text-gray-900'}`}>{value}</p>
-      {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
+    <div className={`bg-white dark:bg-slate-800 rounded-xl shadow-sm border p-4 ${warn ? 'border-amber-200 dark:border-amber-700' : 'border-gray-100 dark:border-slate-700'}`}>
+      <div className="flex items-center gap-2 mb-2">{icon}<span className="text-xs text-gray-500 dark:text-slate-400 font-medium">{label}</span></div>
+      <p className={`text-xl font-bold ${warn ? 'text-amber-600 dark:text-amber-400' : 'text-gray-900 dark:text-white'}`}>{value}</p>
+      {sub && <p className="text-xs text-gray-400 dark:text-slate-500 mt-0.5">{sub}</p>}
     </div>
   )
 }
@@ -478,12 +490,12 @@ function ActionCard({ icon, title, description, children, disabled = false, dang
   children: React.ReactNode; disabled?: boolean; danger?: boolean
 }) {
   return (
-    <div className={`bg-white rounded-xl shadow-sm border p-5 space-y-3 ${danger ? 'border-red-100' : 'border-gray-100'} ${disabled ? 'opacity-60' : ''}`}>
+    <div className={`bg-white dark:bg-slate-800 rounded-xl shadow-sm border p-5 space-y-3 ${danger ? 'border-red-100 dark:border-red-900/50' : 'border-gray-100 dark:border-slate-700'} ${disabled ? 'opacity-60' : ''}`}>
       <div className="flex items-center gap-2">
         {icon}
-        <span className="font-semibold text-gray-800">{title}</span>
+        <span className="font-semibold text-gray-800 dark:text-white">{title}</span>
       </div>
-      <p className="text-sm text-gray-500">{description}</p>
+      <p className="text-sm text-gray-500 dark:text-slate-400">{description}</p>
       <div>{children}</div>
     </div>
   )

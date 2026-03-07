@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from app.auth import global_apps_manager
 from app.deps import require_auth, require_admin
+from app.state import analyzer, report_cache
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -34,6 +35,9 @@ async def add_global_allowed(request: Request):
         success = global_apps_manager.set_allowed_app(app_name, user['username'])
         if success:
             logger.info("AUDIT | user=%s | add_global_allowed | app=%s", user['username'], app_name)
+            report_cache.invalidate()
+            analyzer.refresh_global_lists()
+            analyzer.invalidate_users_cache()
         return JSONResponse({
             "success": success,
             "apps": global_apps_manager.get_allowed_apps(),
@@ -55,6 +59,10 @@ async def remove_global_allowed(request: Request):
         if not app_name:
             return JSONResponse(status_code=400, content={"error": "Не указано имя приложения"})
         success = global_apps_manager.remove_allowed_app(app_name)
+        if success:
+            report_cache.invalidate()
+            analyzer.refresh_global_lists()
+            analyzer.invalidate_users_cache()
         logger.info("AUDIT | user=%s | remove_global_allowed | app=%s", user['username'], app_name)
         return JSONResponse({
             "success": success,
@@ -90,6 +98,9 @@ async def add_global_blocked(request: Request):
         success = global_apps_manager.set_blocked_app(app_name, user['username'])
         if success:
             logger.info("AUDIT | user=%s | add_global_blocked | app=%s", user['username'], app_name)
+            report_cache.invalidate()
+            analyzer.refresh_global_lists()
+            analyzer.invalidate_users_cache()
         return JSONResponse({
             "success": success,
             "apps": global_apps_manager.get_blocked_apps(),
@@ -111,6 +122,10 @@ async def remove_global_blocked(request: Request):
         if not app_name:
             return JSONResponse(status_code=400, content={"error": "Не указано имя приложения"})
         success = global_apps_manager.remove_blocked_app(app_name)
+        if success:
+            report_cache.invalidate()
+            analyzer.refresh_global_lists()
+            analyzer.invalidate_users_cache()
         logger.info("AUDIT | user=%s | remove_global_blocked | app=%s", user['username'], app_name)
         return JSONResponse({
             "success": success,

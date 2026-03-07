@@ -130,7 +130,7 @@ async def create_account(request: Request):
         role = data.get('role', 'viewer')
         if not username or not password or not name:
             return JSONResponse(status_code=400, content={"error": "Логин, пароль и имя обязательны"})
-        if role not in ('admin', 'viewer'):
+        if not role_db.get(role):
             return JSONResponse(status_code=400, content={"error": "Неверная роль"})
         if len(password) < 8:
             return JSONResponse(status_code=400, content={"error": "Пароль должен быть не менее 8 символов"})
@@ -152,11 +152,11 @@ async def update_account(username: str, request: Request):
         data = await request.json()
         name = (data.get('name') or '').strip()
         role = data.get('role')
-        if role and role not in ('admin', 'viewer'):
+        if role and not role_db.get(role):
             return JSONResponse(status_code=400, content={"error": "Неверная роль"})
-        if role == 'viewer' and username == user['username']:
+        if role and role != 'admin' and username == user['username']:
             return JSONResponse(status_code=400, content={"error": "Нельзя изменить собственную роль"})
-        if role == 'viewer':
+        if role and role != 'admin':
             target = account_db.get(username)
             if target and target['role'] == 'admin' and account_db.count_admins() <= 1:
                 return JSONResponse(status_code=400, content={"error": "Невозможно убрать роль у последнего администратора"})

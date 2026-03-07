@@ -140,8 +140,8 @@ async def get_apps_report(request: Request):
         finally:
             db.close()
 
-        global_allowed_set = set(analyzer.global_allowed)
-        global_blocked_set = set(analyzer.global_blocked)
+        global_allowed_set = analyzer.global_allowed
+        global_blocked_set = analyzer.global_blocked
 
         def _global_status(name: str) -> str:
             n = name.lower()
