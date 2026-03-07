@@ -41,6 +41,11 @@ export const api = {
 
   // Users & stats
   getUsers: () => request<UserData[]>('/api/users'),
+  getUsersPaged: (page: number, limit: number, search?: string) => {
+    const params = new URLSearchParams({ page: String(page), limit: String(limit) })
+    if (search) params.set('search', search)
+    return request<{ items: UserData[]; total: number; page: number; limit: number }>(`/api/users?${params}`)
+  },
   getStats: () => request<Stats>('/api/stats'),
 
   // Global apps
@@ -146,6 +151,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ force_full }),
     }),
+  getLogsStatus: () =>
+    request<{ total_files: number; last_processed_mtime: number; last_processed_iso: string | null }>('/api/logs/status'),
 
   // Database maintenance
   getDbStats: () => request<{

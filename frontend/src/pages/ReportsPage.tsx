@@ -2,57 +2,26 @@ import { useState, useMemo, useRef, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Download, X, MapPin, XCircle, Monitor, Search, Wifi, Users, ChevronDown, Calendar, Copy, Check } from 'lucide-react'
 import { api } from '../services/api'
-import type { UserData, AppEntry, AppReport, ComputerReport, ComputerUserEntry, DepartmentReport, SortDir } from '../types'
+import type { UserData, AppEntry, AppReport, ComputerReport, ComputerUserEntry, DepartmentReport, SortDir, Period, StatusFilter } from '../types'
 import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
 import Spinner from '../components/ui/Spinner'
+import SortIcon from '../components/ui/SortIcon'
 import AppUsersPanel from '../components/ui/AppUsersPanel'
 import Pagination from '../components/ui/Pagination'
 import { usePermissions } from '../hooks/usePermissions'
+import { useSortedData } from '../hooks/useSortedData'
 import CityMultiSelect from '../components/ui/CityMultiSelect'
 import { getPeriodDates } from '../utils/dates'
 
 // ─── Filter types ────────────────────────────────────────────────────────────
 
 type Tab = 'users' | 'apps' | 'computers' | 'departments'
-type Period = 'yesterday' | 'week' | 'month' | 'custom' | null
-type StatusFilter = 'allowed' | 'neutral' | 'blocked'
 
 interface FilterProps {
   dateFrom: Date | null
   dateTo: Date | null
   statusFilters: Set<StatusFilter>
-}
-
-// ─── Shared helpers ──────────────────────────────────────────────────────────
-
-function SortIcon({ field, current, dir }: { field: string; current: string | null; dir: SortDir }) {
-  if (field !== current) return <span className="text-gray-300 ml-1">↕</span>
-  return <span className="text-indigo-600 ml-1">{dir === 'asc' ? '↑' : '↓'}</span>
-}
-
-function useSortedData<T extends object>(data: T[]) {
-  const [sortKey, setSortKey] = useState<string | null>(null)
-  const [sortDir, setSortDir] = useState<SortDir>('desc')
-
-  const handleSort = (key: string) => {
-    if (key === sortKey) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
-    else { setSortKey(key); setSortDir('desc') }
-  }
-
-  const sorted: T[] = sortKey
-    ? [...data].sort((a, b) => {
-        const av = (a as Record<string, unknown>)[sortKey]
-        const bv = (b as Record<string, unknown>)[sortKey]
-        const cmp =
-          typeof av === 'string' && typeof bv === 'string'
-            ? av.localeCompare(bv)
-            : (av as number) - (bv as number)
-        return sortDir === 'asc' ? cmp : -cmp
-      })
-    : data
-
-  return { sorted, sortKey, sortDir, handleSort }
 }
 
 function exportCsv(headers: string[], rows: (string | number)[][], filename: string) {

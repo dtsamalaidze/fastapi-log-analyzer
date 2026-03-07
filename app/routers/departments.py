@@ -2,11 +2,11 @@
 # app/routers/departments.py
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.auth import department_apps_manager, department_manager
-from app.deps import get_current_user, require_auth
+from app.deps import require_auth, require_admin
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -25,9 +25,7 @@ async def get_departments(request: Request):
 @router.post("/api/departments/add")
 async def add_department(request: Request):
     try:
-        user = get_current_user(request)
-        if not user or user['role'] != 'admin':
-            return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
+        user = require_admin(request)
         data = await request.json()
         name = (data.get('name') or '').strip()
         if not name:
@@ -39,6 +37,8 @@ async def add_department(request: Request):
             "success": success,
             "message": "Отдел добавлен" if success else "Отдел уже существует",
         })
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/departments/add: %s", e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -47,9 +47,7 @@ async def add_department(request: Request):
 @router.post("/api/departments/remove")
 async def remove_department(request: Request):
     try:
-        user = get_current_user(request)
-        if not user or user['role'] != 'admin':
-            return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
+        user = require_admin(request)
         data = await request.json()
         name = (data.get('name') or '').strip()
         if not name:
@@ -61,6 +59,8 @@ async def remove_department(request: Request):
             "success": success,
             "message": "Отдел удален" if success else "Отдел не найден",
         })
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/departments/remove: %s", e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -68,9 +68,7 @@ async def remove_department(request: Request):
 
 @router.post("/api/departments/set-user")
 async def set_user_department(request: Request):
-    user = get_current_user(request)
-    if not user or user['role'] != 'admin':
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
+    require_admin(request)
     try:
         data = await request.json()
         username = data.get('username')
@@ -82,6 +80,8 @@ async def set_user_department(request: Request):
             "success": success,
             "message": f"Отдел пользователя {username} изменен на {department}" if success else "Ошибка при изменении отдела",
         })
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/departments/set-user: %s", e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -108,9 +108,7 @@ async def get_department_apps(department_name: str, request: Request):
 @router.post("/api/departments/{department_name}/apps/allowed/add")
 async def add_department_allowed(department_name: str, request: Request):
     try:
-        user = get_current_user(request)
-        if not user or user['role'] != 'admin':
-            return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
+        user = require_admin(request)
         data = await request.json()
         app_name = (data.get('app_name') or '').strip()
         if not app_name:
@@ -120,6 +118,8 @@ async def add_department_allowed(department_name: str, request: Request):
             "success": success,
             "message": f"Приложение добавлено в разрешенные для отдела {department_name}" if success else "Приложение уже в списке",
         })
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/departments/%s/apps/allowed/add: %s", department_name, e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -128,9 +128,7 @@ async def add_department_allowed(department_name: str, request: Request):
 @router.post("/api/departments/{department_name}/apps/allowed/remove")
 async def remove_department_allowed(department_name: str, request: Request):
     try:
-        user = get_current_user(request)
-        if not user or user['role'] != 'admin':
-            return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
+        require_admin(request)
         data = await request.json()
         app_name = (data.get('app_name') or '').strip()
         if not app_name:
@@ -140,6 +138,8 @@ async def remove_department_allowed(department_name: str, request: Request):
             "success": success,
             "message": f"Приложение удалено из разрешенных для отдела {department_name}" if success else "Приложение не найдено",
         })
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/departments/%s/apps/allowed/remove: %s", department_name, e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -148,9 +148,7 @@ async def remove_department_allowed(department_name: str, request: Request):
 @router.post("/api/departments/{department_name}/apps/blocked/add")
 async def add_department_blocked(department_name: str, request: Request):
     try:
-        user = get_current_user(request)
-        if not user or user['role'] != 'admin':
-            return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
+        user = require_admin(request)
         data = await request.json()
         app_name = (data.get('app_name') or '').strip()
         if not app_name:
@@ -160,6 +158,8 @@ async def add_department_blocked(department_name: str, request: Request):
             "success": success,
             "message": f"Приложение добавлено в заблокированные для отдела {department_name}" if success else "Приложение уже в списке",
         })
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/departments/%s/apps/blocked/add: %s", department_name, e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -168,9 +168,7 @@ async def add_department_blocked(department_name: str, request: Request):
 @router.post("/api/departments/{department_name}/apps/blocked/remove")
 async def remove_department_blocked(department_name: str, request: Request):
     try:
-        user = get_current_user(request)
-        if not user or user['role'] != 'admin':
-            return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
+        require_admin(request)
         data = await request.json()
         app_name = (data.get('app_name') or '').strip()
         if not app_name:
@@ -180,6 +178,8 @@ async def remove_department_blocked(department_name: str, request: Request):
             "success": success,
             "message": f"Приложение удалено из заблокированных для отдела {department_name}" if success else "Приложение не найдено",
         })
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/departments/%s/apps/blocked/remove: %s", department_name, e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})

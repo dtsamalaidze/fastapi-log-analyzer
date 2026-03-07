@@ -420,25 +420,39 @@ class LogAnalyzer:
             self._users_cache_ts = time.monotonic()
         return users_data
 
-    def get_users_page(self, page: int, limit: int, data_scope: dict) -> Dict:
+    def get_users_page(self, page: int, limit: int, data_scope: dict, search: str = '') -> Dict:
         """Возвращает одну страницу пользователей с пагинацией на уровне БД.
-        Фильтр data_scope применяется в SQL (не в Python).
+        Фильтры data_scope и search применяются в SQL (не в Python).
         Возвращает {"items": [...], "total": int}.
         """
         db = SessionLocal()
         try:
             scope_filter = self._build_scope_filter(db, data_scope)
 
-            total: int = db.query(func.count(LogUser.id)).scalar() if scope_filter is None else (
-                db.query(func.count(LogUser.id)).filter(scope_filter).scalar()
-            )
+            search_filter = None
+            if search:
+                s = f'%{search}%'
+                dept_ids_sq = db.query(Department.id).filter(Department.name.ilike(s)).subquery()
+                search_filter = or_(
+                    LogUser.username.ilike(s),
+                    LogUser.last_name.ilike(s),
+                    LogUser.first_name.ilike(s),
+                    LogUser.middle_name.ilike(s),
+                    LogUser.department_id.in_(dept_ids_sq),
+                )
 
+            active_filters = [f for f in [scope_filter, search_filter] if f is not None]
+
+            count_q = db.query(func.count(LogUser.id))
             page_q = (
                 db.query(LogUser, Department)
                 .outerjoin(Department, LogUser.department_id == Department.id)
             )
-            if scope_filter is not None:
-                page_q = page_q.filter(scope_filter)
+            for f in active_filters:
+                count_q = count_q.filter(f)
+                page_q = page_q.filter(f)
+
+            total: int = count_q.scalar()
 
             log_users = (
                 page_q

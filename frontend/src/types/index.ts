@@ -113,6 +113,8 @@ export interface DepartmentReport {
 }
 
 export type SortDir = 'asc' | 'desc'
+export type Period = 'yesterday' | 'week' | 'month' | 'custom' | null
+export type StatusFilter = 'allowed' | 'neutral' | 'blocked'
 
 // ===== Account Management =====
 

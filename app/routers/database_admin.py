@@ -4,10 +4,10 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from app.deps import get_current_user
+from app.deps import require_auth, require_admin
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -15,13 +15,14 @@ router = APIRouter()
 
 @router.get("/api/computers/{computer_name}/users")
 async def get_computer_users(computer_name: str, request: Request):
-    if not get_current_user(request):
-        return JSONResponse(status_code=401, content={"error": "Не авторизован"})
+    require_auth(request)
     try:
         from app.database import log_user_db
         users = log_user_db.get_computer_users(computer_name)
         ip = log_user_db.get_computer_ip(computer_name)
         return JSONResponse(content={"name": computer_name, "ip_address": ip or None, "users": users})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/computers/%s/users: %s", computer_name, e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -29,9 +30,7 @@ async def get_computer_users(computer_name: str, request: Request):
 
 @router.get("/api/db/stats")
 async def get_db_stats(request: Request):
-    user = get_current_user(request)
-    if not user or user['role'] != 'admin':
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
+    require_admin(request)
     try:
         from app.db import SessionLocal
         from app.models import (
@@ -67,6 +66,8 @@ async def get_db_stats(request: Request):
         finally:
             db.close()
         return JSONResponse({"engine": "postgresql", "db_size": db_size, "tables": table_stats})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/db/stats: %s", e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -74,9 +75,7 @@ async def get_db_stats(request: Request):
 
 @router.post("/api/db/vacuum")
 async def vacuum_db(request: Request):
-    user = get_current_user(request)
-    if not user or user['role'] != 'admin':
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
+    require_admin(request)
     try:
         from app.db import engine
         from sqlalchemy import text as sqltext
@@ -87,6 +86,8 @@ async def vacuum_db(request: Request):
 
         await asyncio.get_running_loop().run_in_executor(None, run_vacuum)
         return JSONResponse({"success": True, "message": "VACUUM ANALYZE выполнен"})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/db/vacuum: %s", e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -94,9 +95,7 @@ async def vacuum_db(request: Request):
 
 @router.get("/api/db/backup")
 async def backup_db(request: Request):
-    user = get_current_user(request)
-    if not user or user['role'] != 'admin':
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
+    require_admin(request)
     try:
         import subprocess
         import os
@@ -143,6 +142,8 @@ async def backup_db(request: Request):
             media_type='application/octet-stream',
             headers={'Content-Disposition': f'attachment; filename="log_analyzer_backup_{timestamp}.sql"'},
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/db/backup: %s", e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -150,9 +151,7 @@ async def backup_db(request: Request):
 
 @router.post("/api/db/integrity-check")
 async def integrity_check_db(request: Request):
-    user = get_current_user(request)
-    if not user or user['role'] != 'admin':
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
+    require_admin(request)
     try:
         from app.db import SessionLocal
         from sqlalchemy import text as sqltext
@@ -167,6 +166,8 @@ async def integrity_check_db(request: Request):
 
         ok = await asyncio.get_running_loop().run_in_executor(None, run_check)
         return JSONResponse({"success": True, "ok": ok, "results": ["ok"] if ok else ["error"]})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/db/integrity-check: %s", e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -174,9 +175,7 @@ async def integrity_check_db(request: Request):
 
 @router.post("/api/db/clear-logs")
 async def clear_logs_db(request: Request):
-    user = get_current_user(request)
-    if not user or user['role'] != 'admin':
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
+    require_admin(request)
     try:
         from app.db import SessionLocal
         from app.models import LogAppPath, LogApp, UserComputer, LogUser, Computer, Setting
@@ -234,6 +233,8 @@ async def clear_logs_db(request: Request):
 
         deleted = await asyncio.get_running_loop().run_in_executor(None, run_clear)
         return JSONResponse({"success": True, "deleted": deleted})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/db/clear-logs: %s", e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})

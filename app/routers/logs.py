@@ -6,7 +6,7 @@ import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from app.deps import get_current_user, require_auth
+from app.deps import require_admin, require_auth
 from app.s3_sync import s3_syncer
 from app.state import analyzer, report_cache
 
@@ -17,10 +17,8 @@ router = APIRouter()
 @router.post("/api/logs/process")
 async def process_logs(request: Request):
     """Triggers log processing. Pass {'force_full': true} for full reprocess."""
+    require_admin(request)
     try:
-        user = get_current_user(request)
-        if not user or user['role'] != 'admin':
-            return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
         data = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
         force_full = bool(data.get('force_full', False))
         loop = asyncio.get_running_loop()
@@ -51,9 +49,7 @@ async def s3_status(request: Request):
 
 @router.post("/api/s3/sync")
 async def s3_sync_now(request: Request):
-    user = get_current_user(request)
-    if not user or user['role'] != 'admin':
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещен"})
+    require_admin(request)
     loop = asyncio.get_running_loop()
     try:
         result = await loop.run_in_executor(None, s3_syncer.sync)

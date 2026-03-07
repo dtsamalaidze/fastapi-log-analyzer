@@ -2,11 +2,11 @@
 # app/routers/accounts.py
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import distinct
 
-from app.deps import get_current_user, require_auth
+from app.deps import require_auth, require_admin
 from app.database import account_db, role_db, department_db
 from app.db import SessionLocal
 from app.models import LogUser
@@ -25,9 +25,7 @@ async def get_my_permissions(request: Request):
 @router.get("/api/scope-options")
 async def get_scope_options(request: Request):
     """Returns available data_scope options (admin only)."""
-    user = get_current_user(request)
-    if not user or user['role'] != 'admin':
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещён"})
+    require_admin(request)
     try:
         dept_names = department_db.get_all_names()
         db = SessionLocal()
@@ -52,6 +50,8 @@ async def get_scope_options(request: Request):
         finally:
             db.close()
         return JSONResponse({'departments': dept_names, 'cities': cities, 'users': users_list})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/scope-options: %s", e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -59,18 +59,14 @@ async def get_scope_options(request: Request):
 
 @router.get("/api/roles")
 async def get_roles(request: Request):
-    user = get_current_user(request)
-    if not user or user['role'] != 'admin':
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещён"})
+    require_admin(request)
     return JSONResponse({"roles": role_db.get_all()})
 
 
 @router.post("/api/roles/create")
 async def create_role(request: Request):
-    user = get_current_user(request)
-    if not user or user['role'] != 'admin':
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещён"})
     try:
+        require_admin(request)
         data = await request.json()
         name = data.get('name', '').strip()
         description = data.get('description', '').strip()
@@ -81,6 +77,8 @@ async def create_role(request: Request):
         if success:
             return JSONResponse({"success": True, "message": f"Роль '{name}' создана"})
         return JSONResponse(status_code=409, content={"error": f"Роль '{name}' уже существует"})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/roles/create: %s", e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -88,13 +86,13 @@ async def create_role(request: Request):
 
 @router.put("/api/roles/{role_name}")
 async def update_role(role_name: str, request: Request):
-    user = get_current_user(request)
-    if not user or user['role'] != 'admin':
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещён"})
     try:
+        require_admin(request)
         data = await request.json()
         role_db.update(role_name, description=data.get('description'), permissions=data.get('permissions'))
         return JSONResponse({"success": True, "message": "Роль обновлена"})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/roles/%s: %s", role_name, e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -102,9 +100,7 @@ async def update_role(role_name: str, request: Request):
 
 @router.delete("/api/roles/{role_name}")
 async def delete_role(role_name: str, request: Request):
-    user = get_current_user(request)
-    if not user or user['role'] != 'admin':
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещён"})
+    require_admin(request)
     success = role_db.delete(role_name)
     if success:
         return JSONResponse({"success": True, "message": f"Роль '{role_name}' удалена"})
@@ -113,11 +109,11 @@ async def delete_role(role_name: str, request: Request):
 
 @router.get("/api/accounts")
 async def get_accounts(request: Request):
-    user = get_current_user(request)
-    if not user or user['role'] != 'admin':
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещён"})
     try:
+        require_admin(request)
         return JSONResponse(content={"accounts": account_db.get_all()})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/accounts: %s", e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -125,10 +121,8 @@ async def get_accounts(request: Request):
 
 @router.post("/api/accounts/create")
 async def create_account(request: Request):
-    user = get_current_user(request)
-    if not user or user['role'] != 'admin':
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещён"})
     try:
+        require_admin(request)
         data = await request.json()
         username = data.get('username', '').strip()
         password = data.get('password', '').strip()
@@ -144,6 +138,8 @@ async def create_account(request: Request):
         if success:
             return JSONResponse({"success": True, "message": f"Аккаунт '{username}' создан"})
         return JSONResponse(status_code=409, content={"error": f"Логин '{username}' уже занят"})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/accounts/create: %s", e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -151,10 +147,8 @@ async def create_account(request: Request):
 
 @router.put("/api/accounts/{username}")
 async def update_account(username: str, request: Request):
-    user = get_current_user(request)
-    if not user or user['role'] != 'admin':
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещён"})
     try:
+        user = require_admin(request)
         data = await request.json()
         name = (data.get('name') or '').strip()
         role = data.get('role')
@@ -170,6 +164,8 @@ async def update_account(username: str, request: Request):
         if success:
             return JSONResponse({"success": True, "message": "Аккаунт обновлён"})
         return JSONResponse(status_code=404, content={"error": "Аккаунт не найден"})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/accounts/%s: %s", username, e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -177,12 +173,10 @@ async def update_account(username: str, request: Request):
 
 @router.put("/api/accounts/{username}/password")
 async def update_account_password(username: str, request: Request):
-    user = get_current_user(request)
-    if not user:
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещён"})
-    if user['role'] != 'admin' and user['username'] != username:
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещён"})
     try:
+        user = require_auth(request)
+        if user['role'] != 'admin' and user['username'] != username:
+            raise HTTPException(status_code=403, detail="Доступ запрещён")
         data = await request.json()
         password = data.get('password', '').strip()
         if not password or len(password) < 8:
@@ -192,6 +186,8 @@ async def update_account_password(username: str, request: Request):
             logger.info("AUDIT | user=%s | change_password | target=%s", user['username'], username)
             return JSONResponse({"success": True, "message": "Пароль изменён"})
         return JSONResponse(status_code=404, content={"error": "Аккаунт не найден"})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/accounts/%s/password: %s", username, e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -199,12 +195,10 @@ async def update_account_password(username: str, request: Request):
 
 @router.delete("/api/accounts/{username}")
 async def delete_account(username: str, request: Request):
-    user = get_current_user(request)
-    if not user or user['role'] != 'admin':
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещён"})
-    if username == user['username']:
-        return JSONResponse(status_code=400, content={"error": "Нельзя удалить собственный аккаунт"})
     try:
+        user = require_admin(request)
+        if username == user['username']:
+            return JSONResponse(status_code=400, content={"error": "Нельзя удалить собственный аккаунт"})
         target = account_db.get(username)
         if target and target['role'] == 'admin' and account_db.count_admins() <= 1:
             return JSONResponse(status_code=400, content={"error": "Невозможно удалить последнего администратора"})
@@ -213,6 +207,8 @@ async def delete_account(username: str, request: Request):
             logger.info("AUDIT | user=%s | delete_account | target=%s", user['username'], username)
             return JSONResponse({"success": True, "message": f"Аккаунт '{username}' удалён"})
         return JSONResponse(status_code=404, content={"error": "Аккаунт не найден"})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/accounts/%s delete: %s", username, e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -220,12 +216,12 @@ async def delete_account(username: str, request: Request):
 
 @router.get("/api/accounts/{username}/permissions")
 async def get_account_permissions(username: str, request: Request):
-    user = get_current_user(request)
-    if not user or user['role'] != 'admin':
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещён"})
     try:
+        require_admin(request)
         perms = account_db.get_permissions(username)
         return JSONResponse({"username": username, "permissions": perms})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/accounts/%s/permissions GET: %s", username, e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
@@ -233,13 +229,13 @@ async def get_account_permissions(username: str, request: Request):
 
 @router.put("/api/accounts/{username}/permissions")
 async def set_account_permissions(username: str, request: Request):
-    user = get_current_user(request)
-    if not user or user['role'] != 'admin':
-        return JSONResponse(status_code=403, content={"error": "Доступ запрещён"})
     try:
+        require_admin(request)
         data = await request.json()
         account_db.set_permissions(username, data.get('permissions', {}))
         return JSONResponse({"success": True, "message": "Права доступа сохранены"})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/accounts/%s/permissions PUT: %s", username, e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})

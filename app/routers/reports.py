@@ -3,16 +3,72 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import func, case, distinct, select
 
-from app.auth import global_apps_manager, department_manager
+from app.db import SessionLocal
 from app.deps import require_auth, apply_data_scope, get_user_data_scope
+from app.models import (
+    LogApp, LogUser, UserComputer, Computer, Department,
+    DepartmentAllowedApp, DepartmentBlockedApp,
+    GlobalAllowedApp, GlobalBlockedApp,
+)
 from app.state import analyzer, report_cache
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Status aggregate expressions — built once at import time.
+# Each evaluates to 1 or 0 per (LogUser, LogApp) row for use inside SUM().
+# Precedence: dept_blocked > dept_allowed > global_blocked > global_allowed > neutral.
+# Caller must have joined LogUser and LogApp before using these.
+_dept_blocked = (
+    select(DepartmentBlockedApp.id)
+    .where(
+        DepartmentBlockedApp.department_id == LogUser.department_id,
+        func.lower(DepartmentBlockedApp.app_name) == func.lower(LogApp.name),
+    )
+    .correlate(LogUser, LogApp)
+    .exists()
+)
+_dept_allowed = (
+    select(DepartmentAllowedApp.id)
+    .where(
+        DepartmentAllowedApp.department_id == LogUser.department_id,
+        func.lower(DepartmentAllowedApp.app_name) == func.lower(LogApp.name),
+    )
+    .correlate(LogUser, LogApp)
+    .exists()
+)
+_global_blocked = (
+    select(GlobalBlockedApp.id)
+    .where(func.lower(GlobalBlockedApp.app_name) == func.lower(LogApp.name))
+    .correlate(LogApp)
+    .exists()
+)
+_global_allowed = (
+    select(GlobalAllowedApp.id)
+    .where(func.lower(GlobalAllowedApp.app_name) == func.lower(LogApp.name))
+    .correlate(LogApp)
+    .exists()
+)
+
+_ALLOWED_C = case(
+    (_dept_blocked, 0), (_dept_allowed, 1),
+    (_global_blocked, 0), (_global_allowed, 1),
+    else_=0,
+)
+_BLOCKED_C = case(
+    (_dept_blocked, 1), (_dept_allowed, 0),
+    (_global_blocked, 1), (_global_allowed, 0),
+    else_=0,
+)
+_NEUTRAL_C = case(
+    (_dept_blocked, 0), (_dept_allowed, 0),
+    (_global_blocked, 0), (_global_allowed, 0),
+    else_=1,
+)
 
 @router.get("/api/reports/users")
 async def get_users_report(
@@ -30,10 +86,11 @@ async def get_users_report(
         users_data = analyzer.get_all_users_data()
         users_data = apply_data_scope(users_data, get_user_data_scope(request))
         return JSONResponse(content=users_data)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/reports/users: %s", e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
-
 
 @router.get("/api/reports/apps")
 async def get_apps_report(request: Request):
@@ -44,65 +101,80 @@ async def get_apps_report(request: Request):
         if cached is not None:
             return JSONResponse(content=cached)
 
-        users_data = analyzer.get_all_users_data()
-        users_data = apply_data_scope(users_data, scope)
+        db = SessionLocal()
+        try:
+            scope_filter = analyzer._build_scope_filter(db, scope)
 
-        allowed_set = set(a.lower() for a in global_apps_manager.get_allowed_apps())
-        blocked_set = set(a.lower() for a in global_apps_manager.get_blocked_apps())
+            # Subquery: distinct computers per app (same scope filter)
+            comp_sq_q = (
+                select(
+                    LogApp.name.label('app_name'),
+                    func.count(distinct(UserComputer.computer_id)).label('cnt'),
+                )
+                .join(LogUser, LogApp.user_id == LogUser.id)
+                .outerjoin(UserComputer, LogUser.id == UserComputer.user_id)
+            )
+            if scope_filter is not None:
+                comp_sq_q = comp_sq_q.where(scope_filter)
+            comp_sq = comp_sq_q.group_by(LogApp.name).subquery()
+
+            # Main aggregation joined with computers subquery — single DB round-trip
+            base_q = (
+                db.query(
+                    LogApp.name,
+                    func.sum(LogApp.launch_count).label('total_launches'),
+                    func.count(distinct(LogApp.user_id)).label('users_count'),
+                    func.min(LogApp.first_launch).label('first_seen'),
+                    func.max(LogApp.last_seen).label('last_seen'),
+                    func.sum(_ALLOWED_C).label('allowed_count'),
+                    func.sum(_BLOCKED_C).label('blocked_count'),
+                    func.sum(_NEUTRAL_C).label('neutral_count'),
+                    func.coalesce(func.max(comp_sq.c.cnt), 0).label('computers_count'),
+                )
+                .join(LogUser, LogApp.user_id == LogUser.id)
+                .outerjoin(comp_sq, LogApp.name == comp_sq.c.app_name)
+            )
+            if scope_filter is not None:
+                base_q = base_q.filter(scope_filter)
+            rows = base_q.group_by(LogApp.name).all()
+        finally:
+            db.close()
+
+        global_allowed_set = set(analyzer.global_allowed)
+        global_blocked_set = set(analyzer.global_blocked)
 
         def _global_status(name: str) -> str:
             n = name.lower()
-            if n in allowed_set:
-                return 'allowed'
-            if n in blocked_set:
+            if n in global_blocked_set:
                 return 'blocked'
+            if n in global_allowed_set:
+                return 'allowed'
             return 'neutral'
-
-        apps_stats: dict = {}
-        for user in users_data:
-            for app in user['apps']:
-                if app['name'] not in apps_stats:
-                    apps_stats[app['name']] = {
-                        'name': app['name'],
-                        'total_launches': 0,
-                        'users': set(),
-                        'computers': set(),
-                        'first_seen': app['first_launch'],
-                        'last_seen': app['last_seen'],
-                        'global_status': _global_status(app['name']),
-                        'status_counts': {'allowed': 0, 'blocked': 0, 'neutral': 0},
-                    }
-                s = apps_stats[app['name']]
-                s['total_launches'] += app['launch_count']
-                s['users'].add(user['username'])
-                s['status_counts'][app['status']] += 1
-                if user['computers'] and user['computers'] != 'Не указан':
-                    for comp in user['computers'].split(', '):
-                        s['computers'].add(comp)
-                if app['first_launch'] and (s['first_seen'] is None or app['first_launch'] < s['first_seen']):
-                    s['first_seen'] = app['first_launch']
-                if app['last_seen'] and (s['last_seen'] is None or app['last_seen'] > s['last_seen']):
-                    s['last_seen'] = app['last_seen']
 
         result = [
             {
-                'name': name,
-                'global_status': s['global_status'],
-                'total_launches': s['total_launches'],
-                'users_count': len(s['users']),
-                'computers_count': len(s['computers']),
-                'first_seen': s['first_seen'],
-                'last_seen': s['last_seen'],
-                'status_counts': s['status_counts'],
+                'name': row.name,
+                'global_status': _global_status(row.name),
+                'total_launches': row.total_launches or 0,
+                'users_count': row.users_count,
+                'computers_count': row.computers_count,
+                'first_seen': row.first_seen.strftime('%Y-%m-%d %H:%M:%S') if row.first_seen else None,
+                'last_seen': row.last_seen.strftime('%Y-%m-%d %H:%M:%S') if row.last_seen else None,
+                'status_counts': {
+                    'allowed': row.allowed_count or 0,
+                    'blocked': row.blocked_count or 0,
+                    'neutral': row.neutral_count or 0,
+                },
             }
-            for name, s in apps_stats.items()
+            for row in rows
         ]
         report_cache.set("apps", scope, result)
         return JSONResponse(content=result)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/reports/apps: %s", e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
-
 
 @router.get("/api/reports/computers")
 async def get_computers_report(request: Request):
@@ -113,48 +185,55 @@ async def get_computers_report(request: Request):
         if cached is not None:
             return JSONResponse(content=cached)
 
-        from app.database import log_user_db
-        users_data = analyzer.get_all_users_data()
-        users_data = apply_data_scope(users_data, scope)
-        ip_map = {c['name']: c['ip_address'] for c in log_user_db.get_all_computers_with_ips()}
+        db = SessionLocal()
+        try:
+            scope_filter = analyzer._build_scope_filter(db, scope)
 
-        computers_stats: dict = {}
-        for user in users_data:
-            if user['computers'] and user['computers'] != 'Не указан':
-                for comp in user['computers'].split(', '):
-                    if comp not in computers_stats:
-                        computers_stats[comp] = {
-                            'name': comp,
-                            'users': set(),
-                            'total_launches': 0,
-                            'apps': set(),
-                            'last_seen': user['log_date'],
-                            'status_counts': {'allowed': 0, 'blocked': 0, 'neutral': 0},
-                        }
-                    computers_stats[comp]['users'].add(user['username'])
-                    computers_stats[comp]['total_launches'] += user['total_launches']
-                    for app in user['apps']:
-                        computers_stats[comp]['apps'].add(app['name'])
-                        computers_stats[comp]['status_counts'][app['status']] += 1
+            q = (
+                db.query(
+                    Computer.name,
+                    Computer.ip_address,
+                    func.count(distinct(LogUser.id)).label('users_count'),
+                    func.sum(LogApp.launch_count).label('total_launches'),
+                    func.count(distinct(LogApp.name)).label('apps_count'),
+                    func.max(UserComputer.last_seen).label('last_seen'),
+                    func.sum(_ALLOWED_C).label('allowed_count'),
+                    func.sum(_BLOCKED_C).label('blocked_count'),
+                    func.sum(_NEUTRAL_C).label('neutral_count'),
+                )
+                .join(UserComputer, Computer.id == UserComputer.computer_id)
+                .join(LogUser, UserComputer.user_id == LogUser.id)
+                .join(LogApp, LogUser.id == LogApp.user_id)
+            )
+            if scope_filter is not None:
+                q = q.filter(scope_filter)
+            rows = q.group_by(Computer.id, Computer.name, Computer.ip_address).all()
+        finally:
+            db.close()
 
         result = [
             {
-                'name': name,
-                'ip_address': ip_map.get(name) or None,
-                'users_count': len(s['users']),
-                'total_launches': s['total_launches'],
-                'apps_count': len(s['apps']),
-                'last_seen': s['last_seen'],
-                'status_counts': s['status_counts'],
+                'name': row.name,
+                'ip_address': row.ip_address or None,
+                'users_count': row.users_count,
+                'total_launches': row.total_launches or 0,
+                'apps_count': row.apps_count,
+                'last_seen': row.last_seen.strftime('%Y-%m-%d %H:%M:%S') if row.last_seen else None,
+                'status_counts': {
+                    'allowed': row.allowed_count or 0,
+                    'blocked': row.blocked_count or 0,
+                    'neutral': row.neutral_count or 0,
+                },
             }
-            for name, s in computers_stats.items()
+            for row in rows
         ]
         report_cache.set("computers", scope, result)
         return JSONResponse(content=result)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/reports/computers: %s", e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})
-
 
 @router.get("/api/reports/departments")
 async def get_departments_report(request: Request):
@@ -165,61 +244,51 @@ async def get_departments_report(request: Request):
         if cached is not None:
             return JSONResponse(content=cached)
 
-        users_data = analyzer.get_all_users_data()
-        users_data = apply_data_scope(users_data, scope)
-        departments = department_manager.get_departments_with_stats()
+        db = SessionLocal()
+        try:
+            scope_filter = analyzer._build_scope_filter(db, scope)
 
-        depts_stats: dict = {}
-        for dept in departments:
-            depts_stats[dept['name']] = {
-                'name': dept['name'],
-                'users': set(), 'total_launches': 0,
-                'apps': set(), 'computers': set(),
-                'status_counts': {'allowed': 0, 'blocked': 0, 'neutral': 0},
-            }
-        depts_stats['Не указан'] = {
-            'name': 'Не указан',
-            'users': set(), 'total_launches': 0,
-            'apps': set(), 'computers': set(),
-            'status_counts': {'allowed': 0, 'blocked': 0, 'neutral': 0},
-        }
-
-        for user in users_data:
-            dept_name = user['department'] or 'Не указан'
-            if dept_name not in depts_stats:
-                depts_stats[dept_name] = {
-                    'name': dept_name,
-                    'users': set(), 'total_launches': 0,
-                    'apps': set(), 'computers': set(),
-                    'status_counts': {'allowed': 0, 'blocked': 0, 'neutral': 0},
-                }
-            s = depts_stats[dept_name]
-            s['users'].add(user['username'])
-            s['total_launches'] += user['total_launches']
-            s['status_counts']['allowed'] += user['allowed_count']
-            s['status_counts']['blocked'] += user['blocked_count']
-            s['status_counts']['neutral'] += user.get('neutral_count', 0)
-            for app in user['apps']:
-                s['apps'].add(app['name'])
-            if user['computers'] and user['computers'] != 'Не указан':
-                for comp in user['computers'].split(', '):
-                    s['computers'].add(comp)
+            q = (
+                db.query(
+                    func.coalesce(Department.name, 'Не указан').label('dept_name'),
+                    func.count(distinct(LogUser.id)).label('users_count'),
+                    func.sum(LogApp.launch_count).label('total_launches'),
+                    func.count(distinct(LogApp.name)).label('apps_count'),
+                    func.count(distinct(UserComputer.computer_id)).label('computers_count'),
+                    func.sum(_ALLOWED_C).label('allowed_count'),
+                    func.sum(_BLOCKED_C).label('blocked_count'),
+                    func.sum(_NEUTRAL_C).label('neutral_count'),
+                )
+                .outerjoin(Department, LogUser.department_id == Department.id)
+                .join(LogApp, LogUser.id == LogApp.user_id)
+                .outerjoin(UserComputer, LogUser.id == UserComputer.user_id)
+            )
+            if scope_filter is not None:
+                q = q.filter(scope_filter)
+            rows = q.group_by(LogUser.department_id, Department.name).all()
+        finally:
+            db.close()
 
         result = [
             {
-                'name': dept_name,
-                'users_count': len(s['users']),
-                'total_launches': s['total_launches'],
-                'apps_count': len(s['apps']),
-                'computers_count': len(s['computers']),
-                'status_counts': s['status_counts'],
-                'avg_launches_per_user': s['total_launches'] // len(s['users']) if s['users'] else 0,
+                'name': row.dept_name,
+                'users_count': row.users_count,
+                'total_launches': row.total_launches or 0,
+                'apps_count': row.apps_count,
+                'computers_count': row.computers_count,
+                'status_counts': {
+                    'allowed': row.allowed_count or 0,
+                    'blocked': row.blocked_count or 0,
+                    'neutral': row.neutral_count or 0,
+                },
+                'avg_launches_per_user': (row.total_launches or 0) // row.users_count if row.users_count else 0,
             }
-            for dept_name, s in depts_stats.items()
-            if s['users']
+            for row in rows
         ]
         report_cache.set("departments", scope, result)
         return JSONResponse(content=result)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Ошибка в /api/reports/departments: %s", e, exc_info=True)
         return JSONResponse(status_code=500, content={"error": "Внутренняя ошибка сервера"})

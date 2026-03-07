@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Database, Zap, ShieldCheck, Trash2, RefreshCw,
-  HardDrive, Table2, AlertTriangle, CheckCircle2, XCircle, Download,
+  HardDrive, Table2, AlertTriangle, CheckCircle2, XCircle, Download, Play,
 } from 'lucide-react'
 import { api } from '../services/api'
 import { usePermissions } from '../hooks/usePermissions'
@@ -47,6 +47,8 @@ export default function DatabasePage() {
 
   const [vacuumDone, setVacuumDone] = useState(false)
   const [clearConfirmText, setClearConfirmText] = useState('')
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [processResult, setProcessResult] = useState<string | null>(null)
 
   const handleBackup = () => {
     window.open('/api/db/backup', '_blank')
@@ -80,6 +82,34 @@ export default function DatabasePage() {
     onError: (e: Error) => showToast(e.message, 'error'),
   })
 
+  const { data: logsStatus } = useQuery({
+    queryKey: ['logs-status'],
+    queryFn: api.getLogsStatus,
+    refetchInterval: isProcessing ? 2000 : false,
+  })
+
+  const processLogsMutation = useMutation({
+    mutationFn: (force_full: boolean) => api.processLogs(force_full),
+    onMutate: () => { setIsProcessing(true); setProcessResult(null) },
+    onSuccess: (data) => {
+      setIsProcessing(false)
+      const res = data.result as Record<string, number> | null
+      if (res && typeof res === 'object') {
+        const processed = res.processed ?? res.files_processed ?? null
+        setProcessResult(processed != null ? `Обработано файлов: ${processed}` : 'Обработка завершена')
+      } else {
+        setProcessResult('Обработка завершена')
+      }
+      qc.invalidateQueries({ queryKey: ['logs-status'] })
+      qc.invalidateQueries({ queryKey: ['db-stats'] })
+      showToast('Логи успешно обработаны', 'success')
+    },
+    onError: (e: Error) => {
+      setIsProcessing(false)
+      showToast(e.message, 'error')
+    },
+  })
+
   const clearMutation = useMutation({
     mutationFn: (days?: number) => api.clearLogs(days),
     onSuccess: res => {
@@ -93,6 +123,7 @@ export default function DatabasePage() {
   })
 
   const canManage = perms.database.manage
+  const canProcess = perms.logs.process
 
   if (isLoading) return <div className="flex justify-center py-20"><Spinner size="lg" /></div>
 
@@ -158,6 +189,58 @@ export default function DatabasePage() {
 
       {/* ── Operations ── */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+        {/* Process logs */}
+        <ActionCard
+          icon={<Play className="w-5 h-5 text-indigo-500" />}
+          title="Обработка логов"
+          description="Читает лог-файлы и сохраняет данные в базу. Инкрементальный режим обрабатывает только новые файлы."
+          disabled={!canProcess}
+        >
+          <div className="flex gap-2 flex-wrap">
+            <Button
+              onClick={() => processLogsMutation.mutate(false)}
+              loading={isProcessing}
+              disabled={!canProcess || isProcessing}
+              variant="secondary"
+            >
+              <Play className="w-4 h-4" /> Обработать логи
+            </Button>
+            <Button
+              onClick={() => processLogsMutation.mutate(true)}
+              loading={isProcessing}
+              disabled={!canProcess || isProcessing}
+              variant="secondary"
+            >
+              <RefreshCw className="w-4 h-4" /> Полная обработка
+            </Button>
+          </div>
+          {isProcessing && logsStatus && (
+            <div className="mt-3 p-3 bg-indigo-50 rounded-lg text-sm space-y-1">
+              <div className="flex items-center gap-2 text-indigo-700 font-medium">
+                <Spinner size="sm" />
+                Обработка... ({logsStatus.total_files} файлов)
+              </div>
+              {logsStatus.last_processed_iso && (
+                <p className="text-indigo-500 text-xs">
+                  Последний обработан: {new Date(logsStatus.last_processed_iso).toLocaleString('ru-RU')}
+                </p>
+              )}
+            </div>
+          )}
+          {!isProcessing && processResult && (
+            <div className="mt-3 p-3 bg-emerald-50 rounded-lg text-sm flex items-center gap-2 text-emerald-800">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              {processResult}
+            </div>
+          )}
+          {!isProcessing && logsStatus && !processResult && (
+            <p className="mt-2 text-xs text-gray-400">
+              Файлов в папке: {logsStatus.total_files}
+              {logsStatus.last_processed_iso && ` · последняя обработка: ${new Date(logsStatus.last_processed_iso).toLocaleString('ru-RU')}`}
+            </p>
+          )}
+        </ActionCard>
 
         {/* VACUUM ANALYZE */}
         <ActionCard

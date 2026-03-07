@@ -1,16 +1,15 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Users, FileText, Monitor, Layers, Search, Calendar } from 'lucide-react'
 import { api } from '../services/api'
-import type { UserData, AppEntry, SortDir } from '../types'
+import type { UserData, AppEntry, SortDir, Period, StatusFilter } from '../types'
 import Badge from '../components/ui/Badge'
+import SortIcon from '../components/ui/SortIcon'
 import Spinner from '../components/ui/Spinner'
 import Pagination from '../components/ui/Pagination'
 import { getPeriodDates } from '../utils/dates'
 
 type SortKey = 'username' | 'total_apps' | 'total_launches' | 'allowed_count' | 'blocked_count'
-type Period = 'yesterday' | 'week' | 'month' | 'custom' | null
-type StatusFilter = 'allowed' | 'neutral' | 'blocked'
 
 function StatCard({ icon: Icon, label, value, colorCls }: { icon: React.ElementType; label: string; value: number; colorCls: string }) {
   return (
@@ -26,11 +25,6 @@ function StatCard({ icon: Icon, label, value, colorCls }: { icon: React.ElementT
       </div>
     </div>
   )
-}
-
-function SortIcon({ field, current, dir }: { field: string; current: string; dir: SortDir }) {
-  if (field !== current) return <span className="text-gray-300 dark:text-slate-600 ml-1">↕</span>
-  return <span className="text-indigo-600 dark:text-indigo-400 ml-1">{dir === 'asc' ? '↑' : '↓'}</span>
 }
 
 function displayName(user: UserData): string {
@@ -88,6 +82,7 @@ const STATUS_OPTIONS: { id: StatusFilter; label: string; active: string; inactiv
 
 export default function UsersPage() {
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('total_launches')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -98,11 +93,23 @@ export default function UsersPage() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(25)
 
-  const { data: users = [], isLoading } = useQuery({
-    queryKey: ['users'],
-    queryFn: api.getUsers,
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(timer)
+  }, [search])
+
+  useEffect(() => {
+    setPage(1)
+  }, [debouncedSearch])
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['users', page, pageSize, debouncedSearch],
+    queryFn: () => api.getUsersPaged(page, pageSize, debouncedSearch),
     staleTime: 60_000,
   })
+
+  const users = data?.items ?? []
+  const serverTotal = data?.total ?? 0
 
   const { data: stats } = useQuery({
     queryKey: ['stats'],
@@ -140,15 +147,6 @@ export default function UsersPage() {
   const { from: dateFrom, to: dateTo } = getPeriodDates(period, customFrom, customTo)
 
   const processedUsers = users
-    .filter(u => {
-      if (!search) return true
-      const q = search.toLowerCase()
-      return (
-        u.username.toLowerCase().includes(q) ||
-        displayName(u).toLowerCase().includes(q) ||
-        (u.department ?? '').toLowerCase().includes(q)
-      )
-    })
     .map(u => {
       const filteredApps = filterApps(u.apps, dateFrom, dateTo, statusFilters)
       return {
@@ -183,23 +181,10 @@ export default function UsersPage() {
       return sortDir === 'asc' ? cmp : -cmp
     })
 
-  const pagedUsers = processedUsers.slice((page - 1) * pageSize, page * pageSize)
-  const totalPages = Math.max(1, Math.ceil(processedUsers.length / pageSize))
+  const pagedUsers = processedUsers
+  const totalPages = Math.max(1, Math.ceil(serverTotal / pageSize))
 
   const hasFilters = period !== null || statusFilters.size > 0 || search.length > 0
-  const filteredStats = hasFilters ? {
-    total_users: processedUsers.filter(p => p.filteredApps.length > 0).length,
-    total_launches: processedUsers.reduce((s, p) => s + p.total_launches, 0),
-    total_unique_apps: new Set(processedUsers.flatMap(p => p.filteredApps.map(a => a.name.toLowerCase()))).size,
-    total_computers: new Set(
-      processedUsers
-        .filter(p => p.filteredApps.length > 0)
-        .flatMap(p => (p.user.computers || '').split(',').map(c => c.trim().toLowerCase()).filter(c => c && c !== 'не указан'))
-    ).size,
-    total_log_files: processedUsers
-      .filter(p => p.filteredApps.length > 0)
-      .reduce((s, p) => s + (p.user.log_files_count ?? 0), 0),
-  } : null
 
   if (isLoading) {
     return (
@@ -218,10 +203,10 @@ export default function UsersPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard icon={Users} label="Пользователей" value={filteredStats?.total_users ?? stats?.total_users ?? users.length} colorCls="bg-indigo-500" />
-        <StatCard icon={FileText} label="Лог-файлов" value={filteredStats?.total_log_files ?? stats?.total_log_files ?? 0} colorCls="bg-purple-500" />
-        <StatCard icon={Layers} label="Уникальных приложений" value={filteredStats?.total_unique_apps ?? stats?.total_unique_apps ?? 0} colorCls="bg-blue-500" />
-        <StatCard icon={Monitor} label="Компьютеров" value={filteredStats?.total_computers ?? stats?.total_computers ?? 0} colorCls="bg-teal-500" />
+        <StatCard icon={Users} label="Пользователей" value={serverTotal || stats?.total_users || 0} colorCls="bg-indigo-500" />
+        <StatCard icon={FileText} label="Лог-файлов" value={stats?.total_log_files ?? 0} colorCls="bg-purple-500" />
+        <StatCard icon={Layers} label="Уникальных приложений" value={stats?.total_unique_apps ?? 0} colorCls="bg-blue-500" />
+        <StatCard icon={Monitor} label="Компьютеров" value={stats?.total_computers ?? 0} colorCls="bg-teal-500" />
       </div>
 
       {/* Filters */}
@@ -286,7 +271,7 @@ export default function UsersPage() {
           </div>
           {hasFilters && (
             <button
-              onClick={() => { setPeriod(null); setCustomFrom(''); setCustomTo(''); setStatusFilters(new Set()) }}
+              onClick={() => { setPeriod(null); setCustomFrom(''); setCustomTo(''); setStatusFilters(new Set()); setSearch('') }}
               className="ml-auto text-xs text-gray-400 dark:text-slate-500 hover:text-gray-600 dark:hover:text-slate-300 underline"
             >
               Сбросить
@@ -300,7 +285,7 @@ export default function UsersPage() {
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-slate-500" />
         <input
           value={search}
-          onChange={e => { setSearch(e.target.value); setPage(1) }}
+          onChange={e => setSearch(e.target.value)}
           placeholder="Поиск по пользователю или отделу..."
           className="w-full pl-9 pr-4 py-2.5 border border-gray-300 dark:border-slate-600 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-slate-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 shadow-sm"
         />
@@ -353,7 +338,7 @@ export default function UsersPage() {
           page={page}
           totalPages={totalPages}
           pageSize={pageSize}
-          total={processedUsers.length}
+          total={serverTotal}
           onPage={p => { setPage(p); setExpanded(new Set()) }}
           onPageSize={s => { setPageSize(s); setPage(1) }}
         />
