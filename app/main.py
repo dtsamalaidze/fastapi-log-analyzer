@@ -114,7 +114,9 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         if request.method not in self._SAFE_METHODS and request.url.path.startswith("/api/"):
             origin = request.headers.get("origin") or request.headers.get("referer", "")
             if origin:
-                if not any(origin.startswith(o) for o in config.CORS_ORIGINS):
+                server_origin = f"{request.url.scheme}://{request.url.netloc}"
+                allowed = config.CORS_ORIGINS + [server_origin]
+                if not any(origin.startswith(o) for o in allowed):
                     logger.warning("CSRF blocked: bad origin=%s path=%s", origin, request.url.path)
                     return StarletteResponse("Forbidden", status_code=403)
             elif request.cookies.get("session_token"):
